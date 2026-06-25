@@ -52,8 +52,10 @@ export class CharactersStorage {
 		jsons.forEach(json => {
 			if (json == null) return;
 
-			// A "characters" collection file
-			if (json.fileType === "characters" && Array.isArray(json.characters)) {
+			// A "characters" collection file.
+			// Note: the upload helper strips `fileType`/`siteVersion` before returning, so detect
+			// the collection by its shape (a `characters` array) rather than by `fileType`.
+			if (Array.isArray(json.characters)) {
 				json.characters.forEach(it => out.push(this._cleanUploaded(it)));
 				return;
 			}
