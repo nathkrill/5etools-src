@@ -1,0 +1,62 @@
+# Netlify configuration for 5etools (static client-only site)
+# See: https://docs.netlify.com/configure-builds/file-based-configuration/
+
+[build]
+  # The repo root is also the served site root; build artifacts (compiled CSS,
+  # generated data/pages, service worker) are emitted in-place.
+  command = "npm run build"
+  publish = "."
+
+[build.environment]
+  # package.json `engines` requires Node >= 24.
+  NODE_VERSION = "24"
+
+# --- Headers ---------------------------------------------------------------
+
+# Never long-cache the service worker entrypoint, so clients pick up new
+# precache manifests promptly.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/sw-injector.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# HTML is hash-routed and changes between deploys; revalidate each load.
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Hashed/static assets can be cached aggressively.
+[[headers]]
+  for = "/js/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/css/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/fonts/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# JSON content data: revalidate so updated data is fetched, but allow caching.
+[[headers]]
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+# --- Notes -----------------------------------------------------------------
+# No SPA redirect rule is needed: every page is a real .html file and in-page
+# state uses URL hash fragments, so deep links resolve client-side.
+#
+# Images are NOT bundled in this repo (the Dockerfile pulls them from the
+# 5etools-img image). Point the app at an external image mirror/CDN via the
+# `DEPLOYED_IMG_ROOT` global if you need images.
