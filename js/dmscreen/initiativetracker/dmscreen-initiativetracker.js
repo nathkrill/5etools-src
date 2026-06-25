@@ -26,6 +26,8 @@ import {
 } from "./dmscreen-initiativetracker-rowstatebuilder.js";
 import {InitiativeTrackerDefaultParty} from "./dmscreen-initiativetracker-defaultparty.js";
 import {ListUtilBestiary} from "../../utils-list-bestiary.js";
+import {CharactersStorage} from "../../characters/characters-storage.js";
+import {CharactersCalc} from "../../characters/characters-calc.js";
 
 // TODO(Future) refactor to subclass `DmScreenPanelAppBase`; move state to `_comp`
 export class InitiativeTracker extends BaseComponent {
@@ -49,6 +51,7 @@ export class InitiativeTracker extends BaseComponent {
 
 		this._doUpdateExternalStates = null;
 		this._sendStateToClientsDebounced = null;
+		this._doSyncCharactersDebounced = null;
 	}
 
 	getState () {
@@ -106,6 +109,9 @@ export class InitiativeTracker extends BaseComponent {
 			this._sendStateToClientsDebounced();
 		};
 		this._addHookAllBase(this._doUpdateExternalStates);
+
+		this._doSyncCharactersDebounced = MiscUtil.debounce(() => this._pSyncLinkedCharacters(), 200);
+		this._addHookAllBase(this._doSyncCharactersDebounced);
 
 		this._viewRowsActive = new InitiativeTrackerRowDataViewActive({
 			comp: this,
@@ -174,7 +180,7 @@ export class InitiativeTracker extends BaseComponent {
 					.filter(Boolean);
 			});
 
-		const btnAddMonster = ee`<button class="ve-btn ve-btn-success ve-btn-xs dm-init-lockable ve-mr-2" title="Add Creature"><span class="glyphicon glyphicon-print"></span></button>`
+		const btnAddMonster = ee`<button class="ve-btn ve-btn-success ve-btn-xs dm-init-lockable" title="Add Creature"><span class="glyphicon glyphicon-print"></span></button>`
 			.onn("click", async () => {
 				if (this._state.isLocked) return;
 
@@ -220,6 +226,46 @@ export class InitiativeTracker extends BaseComponent {
 					}));
 
 				this._state.rows = rowsNxt;
+			});
+
+		const btnAddCharacter = ee`<button class="ve-btn ve-btn-success ve-btn-xs dm-init-lockable ve-mr-2" title="Add Player Character (from the Characters page)"><span class="glyphicon glyphicon-user"></span></button>`
+			.onn("click", async () => {
+				if (this._state.isLocked) return;
+
+				const characters = await CharactersStorage.pLoadAll();
+				if (!characters.length) {
+					JqueryUtil.doToast({type: "warning", content: `No saved characters were found. Create one on the Characters page first.`});
+					return;
+				}
+
+				const ixChar = await InputUiUtil.pGetUserEnum({
+					values: characters,
+					fnDisplay: it => it.name || "(Unnamed Character)",
+					title: "Add Player Character",
+					placeholder: "Select a character...",
+				});
+				if (ixChar == null) return;
+
+				const character = characters[ixChar];
+
+				const hpMax = character.hp?.max || CharactersCalc.getSuggestedMaxHp(character);
+				const hpCurrent = character.hp?.current ?? hpMax;
+
+				const initiativeModifier = CharactersCalc.getInitiative(character, null);
+				const initiative = await this._roller.pGetRollInitiative({name: character.name, initiativeModifier});
+
+				this._state.rows = [
+					...this._state.rows,
+					await this._rowStateBuilderActive.pGetNewRowState({
+						name: character.name,
+						characterId: character.id,
+						hpCurrent,
+						hpMax,
+						initiative,
+						isPlayerVisible: true,
+					}),
+				]
+					.filter(Boolean);
 			});
 
 		const btnSetPrevActive = ee`<button class="ve-btn ve-btn-default ve-btn-xs" title="Previous Turn"><span class="glyphicon glyphicon-step-backward"></span></button>`
@@ -333,6 +379,7 @@ export class InitiativeTracker extends BaseComponent {
 				<div class="ve-btn-group ve-flex">
 					${btnAdd}
 					${btnAddMonster}
+					${btnAddCharacter}
 				</div>
 				<div class="ve-btn-group">${btnSetPrevActive}${btnSetNextActive}</div>
 				${iptRound}
@@ -581,6 +628,7 @@ export class InitiativeTracker extends BaseComponent {
 		"scaledCr",
 		"scaledSummonSpellLevel",
 		"scaledSummonClassLevel",
+		"characterId",
 	];
 
 	_getCreatureViewerFriendlyState () {
@@ -603,6 +651,44 @@ export class InitiativeTracker extends BaseComponent {
 		if (!this._creatureViewers.length) return;
 		const creatureViewerFriendlyState = this._getCreatureViewerFriendlyState();
 		this._creatureViewers.forEach(it => it.setCreatureState(creatureViewerFriendlyState));
+	}
+
+	/* -------------------------------------------- */
+
+	/**
+	 * Write tracker HP changes back to any linked player characters' IndexedDB records.
+	 * Initiative is intentionally _not_ written back (it is tracker-local only).
+	 */
+	async _pSyncLinkedCharacters () {
+		const linkedRows = this._state.rows
+			.filter(({entity}) => entity.characterId);
+		if (!linkedRows.length) return;
+
+		const characters = await CharactersStorage.pLoadAll();
+		if (!characters.length) return;
+
+		let isAnyChange = false;
+
+		linkedRows.forEach(({entity}) => {
+			const character = characters.find(it => it.id === entity.characterId);
+			if (!character) return;
+
+			character.hp = character.hp || {};
+
+			if (entity.hpMax != null && character.hp.max !== entity.hpMax) {
+				character.hp.max = entity.hpMax;
+				isAnyChange = true;
+			}
+
+			if (entity.hpCurrent != null && character.hp.current !== entity.hpCurrent) {
+				character.hp.current = entity.hpCurrent;
+				isAnyChange = true;
+			}
+		});
+
+		if (!isAnyChange) return;
+
+		await CharactersStorage.pSaveAll(characters);
 	}
 
 	/* -------------------------------------------- */

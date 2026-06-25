@@ -1,0 +1,176 @@
+@use "../vars/vars-night";
+
+@layer vetools {
+	.ve-night-mode .ve-char .ve-char {
+		&-mgr {
+			&__row {
+				border-color: vars-night.$rgb-border-grey--trans-night;
+
+				&:hover {
+					background-color: vars-night.$rgb-bg--alt-night;
+				}
+			}
+		}
+	}
+
+	.ve-night-mode .ve-char-sheet {
+		&__tile,
+		&__panel,
+		&__ability,
+		&__slot {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__panel-title,
+		&__line + &__line,
+		&__feature + &__feature {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__feature-tabs {
+			border-bottom-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__feature-tab {
+			&:hover {
+				background: vars-night.$rgb-bg--alt-night;
+			}
+
+			&--active {
+				border-color: vars-night.$rgb-border-grey--trans-night;
+				background: vars-night.$rgb-bg--alt-night;
+
+				&:hover {
+					background: vars-night.$rgb-bg--alt-night;
+				}
+			}
+		}
+
+		&__tile--clickable:hover,
+		&__roll:hover {
+			background: vars-night.$rgb-bg--alt-night;
+		}
+
+		&__roll:hover {
+			border-color: vars-night.$rgb-link-blue--muted-night;
+		}
+
+		&__prof-dot {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+
+			&--proficient,
+			&--expertise {
+				background-color: vars-night.$rgb-link-blue--muted-night;
+				border-color: vars-night.$rgb-link-blue--muted-night;
+			}
+		}
+
+		&__slot-pip {
+			border-color: vars-night.$rgb-link-blue--muted-night;
+
+			&--used {
+				background: vars-night.$rgb-link-blue--muted-night;
+			}
+		}
+
+		&__hd-pip {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+
+			&--used {
+				background: vars-night.$rgb-border-grey--trans-night;
+			}
+		}
+
+		&__spell-pill {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+
+			&--prepared {
+				border-color: vars-night.$rgb-link-blue--muted-night;
+			}
+		}
+
+		&__spell-hdr {
+			border-bottom-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__spell-list {
+			border-right-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__spell-row {
+			&:hover {
+				background: vars-night.$rgb-bg--alt-night;
+			}
+
+			&--on {
+				background: vars-night.$rgb-bg--alt-night;
+			}
+		}
+
+		&__spell-toggle {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+
+			&:hover:not([disabled]) {
+				border-color: vars-night.$rgb-link-blue--muted-night;
+			}
+
+			&--on {
+				border-color: vars-night.$rgb-link-blue--muted-night;
+				background: vars-night.$rgb-link-blue--muted-night;
+			}
+		}
+
+		// -------- Inventory --------
+		&__currency {
+			border-bottom-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__inv-row {
+			border-bottom-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__inv-picker {
+			border-right-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__inv-picker-row {
+			&:hover {
+				background: vars-night.$rgb-bg--alt-night;
+			}
+		}
+	}
+
+	.ve-night-mode .ve-char-builder {
+		&__nav {
+			border-right-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__nav-btn {
+			&:hover {
+				background-color: vars-night.$rgb-bg--alt-night;
+			}
+
+			&--active {
+				background-color: vars-night.$rgb-link-blue--muted-night;
+				border-color: vars-night.$rgb-link-blue--muted-night;
+
+				&:hover {
+					background-color: vars-night.$rgb-link-blue--muted-night;
+				}
+			}
+		}
+
+		&__preview {
+			border-top-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__class-row,
+		&__feat-row {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__review-row {
+			border-bottom-color: vars-night.$rgb-border-grey--trans-night;
+		}
+	}
+}

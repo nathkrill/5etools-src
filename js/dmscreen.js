@@ -19,6 +19,7 @@ import {
 import {DmMapper} from "./dmscreen/dmscreen-mapper.js";
 import {TimerTrackerMoonSpriteLoader} from "./dmscreen/dmscreen-timetracker.js";
 import {
+	PanelContentManager_Character,
 	PanelContentManager_Counter,
 	PanelContentManager_InitiativeTracker,
 	PanelContentManager_InitiativeTrackerCreatureViewer,
@@ -29,6 +30,7 @@ import {
 	PanelContentManager_UnitConverter,
 	PanelContentManagerFactory,
 } from "./dmscreen/dmscreen-panels.js";
+import {CharactersStorage} from "./characters/characters-storage.js";
 
 import {OmnisearchBacking} from "./omnisearch/omnisearch-backing.js";
 import {Panzoom} from "./utils-ui/utils-ui-panzoom.js";
@@ -3065,6 +3067,32 @@ class AddMenuSpecialTab extends AddMenuTab {
 			btnCounter.onn("click", async () => {
 				const pcm = new PanelContentManager_Counter({board: this._board, panel: this.menu.pnl});
 				await pcm.pDoPopulate();
+				this.menu.doClose();
+			});
+
+			ee`<hr class="ve-hr-2">`.appendTo(eleTab);
+
+			const wrpCharacter = ee`<div class="ve-ui-modal__row"><span>Player Character <i class="ve-muted">(from the Characters page)</i></span></div>`.appendTo(eleTab);
+			const btnCharacter = ee`<button class="ve-btn ve-btn-primary ve-btn-sm">Add</button>`.appendTo(wrpCharacter);
+			btnCharacter.onn("click", async () => {
+				const characters = await CharactersStorage.pLoadAll();
+				if (!characters.length) {
+					JqueryUtil.doToast({type: "warning", content: `No saved characters were found. Create one on the Characters page first.`});
+					return;
+				}
+
+				const ixChar = await InputUiUtil.pGetUserEnum({
+					values: characters,
+					fnDisplay: it => it.name || "(Unnamed Character)",
+					title: "Select a Character",
+					placeholder: "Select a character...",
+				});
+				if (ixChar == null) return;
+
+				const character = characters[ixChar];
+
+				const pcm = new PanelContentManager_Character({board: this._board, panel: this.menu.pnl});
+				await pcm.pDoPopulate({state: {id: character.id}, title: character.name || "Character"});
 				this.menu.doClose();
 			});
 

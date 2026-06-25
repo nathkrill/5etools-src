@@ -1,5 +1,6 @@
 import {
 	PANEL_TYP_ADVENTURE_DYNAMIC_MAP,
+	PANEL_TYP_CHARACTER,
 	PANEL_TYP_COUNTER,
 	PANEL_TYP_INITIATIVE_TRACKER, PANEL_TYP_INITIATIVE_TRACKER_CREATURE_VIEWER,
 	PANEL_TYP_INITIATIVE_TRACKER_PLAYER_V0,
@@ -9,6 +10,7 @@ import {InitiativeTracker} from "./initiativetracker/dmscreen-initiativetracker.
 import {InitiativeTrackerPlayerV0, InitiativeTrackerPlayerV1} from "./dmscreen-playerinitiativetracker.js";
 import {InitiativeTrackerCreatureViewer} from "./dmscreen-initiativetrackercreatureviewer.js";
 import {Counter} from "./dmscreen-counter.js";
+import {CharacterPanelApp} from "./dmscreen-character.js";
 import {NoteBox} from "./dmscreen-notebox.js";
 import {UnitConverter} from "./dmscreen-unitconverter.js";
 import {MoneyConverter} from "./dmscreen-moneyconverter.js";
@@ -183,6 +185,17 @@ export class PanelContentManager_Counter extends _PanelContentManager {
 
 	_getPanelApp ({state}) {
 		return Counter.getPanelApp({board: this._board, savedState: state});
+	}
+}
+
+export class PanelContentManager_Character extends _PanelContentManager {
+	static _PANEL_TYPE = PANEL_TYP_CHARACTER;
+	static _TITLE = "Character";
+
+	static _ = this._register();
+
+	_getPanelApp ({state}) {
+		return CharacterPanelApp.getPanelApp({board: this._board, savedState: state});
 	}
 }
 

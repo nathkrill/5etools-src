@@ -53,6 +53,10 @@ export class InitiativeTrackerRowDataSerializer extends InitiativeTrackerDataSer
 		"entity.conditions": "c",
 		"entity.isPlayerVisible": "v",
 
+		// region Linked player character (Characters tool)
+		"entity.characterId": "cid",
+		// endregion
+
 		// region Used by player tracker
 		"entity.hpWoundLevel": "hh",
 		"entity.ordinal": "o",

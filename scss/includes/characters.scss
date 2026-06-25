@@ -1,0 +1,616 @@
+@use "../vars/vars";
+
+@layer vetools {
+	.ve-char {
+		&__gap-1 {
+			gap: 4px;
+		}
+
+		&__gap-2 {
+			gap: 8px;
+		}
+	}
+
+	// (Class namespace to enable selectors in FVTT)
+	.ve-char .ve-char {
+		// region Manager (character list)
+		&-mgr {
+			&__wrp {
+				gap: 8px;
+			}
+
+			&__row {
+				border: 1px solid vars.$rgb-border-grey;
+				border-radius: 4px;
+				padding: 6px 10px;
+				cursor: pointer;
+
+				&:hover {
+					background-color: vars.$rgb-border-grey--muted;
+				}
+			}
+
+			&__name {
+				font-weight: bold;
+				font-size: 1.1em;
+			}
+
+			&__meta {
+				opacity: 0.7;
+				font-size: 0.85em;
+			}
+		}
+		// endregion
+
+	}
+
+	// region Sheet
+	.ve-char-sheet {
+		gap: 10px;
+
+		// Allow descendants to respond to the sheet's own width (e.g. when embedded
+		// in a narrow DM Screen panel) rather than the viewport width.
+		container-type: inline-size;
+		container-name: char-sheet;
+
+		&__header h3 {
+			font-weight: bold;
+		}
+
+		// Top stat tiles (AC / HP / etc.)
+		&__tile {
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 8px;
+			padding: 8px 12px;
+			min-width: 96px;
+			text-align: center;
+		}
+
+		&__tile--clickable {
+			cursor: pointer;
+
+			&:hover {
+				background: vars.$rgb-border-grey--muted;
+			}
+		}
+
+		&__tile-val {
+			font-size: 1.5em;
+			font-weight: bold;
+			line-height: 1.1;
+		}
+
+		// Clickable dice-roll values (saves / skills / ability mods)
+		&__roll {
+			appearance: none;
+			background: transparent;
+			border: 1px solid transparent;
+			border-radius: 4px;
+			padding: 0 6px;
+			cursor: pointer;
+			color: inherit;
+			font: inherit;
+
+			&:hover {
+				border-color: vars.$rgb-link-blue;
+				background: vars.$rgb-border-grey--muted;
+			}
+		}
+
+		// HP manager modal
+		&__hp-disp {
+			font-size: 1.8em;
+			font-weight: bold;
+			line-height: 1.1;
+		}
+
+		&__hp-disp-temp {
+			font-size: 1.1em;
+			color: vars.$rgb-link-blue;
+		}
+
+		&__hp-ipt {
+			width: 72px;
+			display: inline-block;
+		}
+
+		// Spell slots
+		&__slot-row {
+			padding: 1px 0;
+		}
+
+		&__slot-lvl {
+			min-width: 42px;
+		}
+
+		&__slot-pip {
+			appearance: none;
+			width: 14px;
+			height: 14px;
+			padding: 0;
+			border-radius: 50%;
+			border: 1px solid vars.$rgb-link-blue;
+			background: transparent;
+			cursor: pointer;
+
+			&--used {
+				background: vars.$rgb-link-blue;
+			}
+
+			&:hover {
+				box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.08);
+			}
+		}
+
+		// Hit dice
+		&__hd-row {
+			padding: 1px 0;
+		}
+
+		&__hd-die {
+			min-width: 42px;
+		}
+
+		&__hd-pip {
+			appearance: none;
+			width: 14px;
+			height: 14px;
+			padding: 0;
+			border-radius: 3px; // square-ish to distinguish from round spell-slot pips
+			border: 1px solid vars.$rgb-border-grey;
+			background: transparent;
+			cursor: pointer;
+
+			&--used {
+				background: vars.$rgb-border-grey;
+			}
+
+			&:hover {
+				box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.08);
+			}
+		}
+
+		// Known/prepared spell pills (on the sheet)
+		&__spell-pill {
+			display: inline-block;
+			padding: 1px 6px;
+			border: 1px solid vars.$rgb-border-grey--muted;
+			border-radius: 10px;
+			font-size: 0.9em;
+			white-space: nowrap;
+
+			// Prepared spells stand out; in-book-but-unprepared spells are dimmed.
+			&--prepared {
+				border-color: vars.$rgb-link-blue;
+				background: rgba(51, 122, 183, 0.10);
+			}
+
+			&--unprepared {
+				opacity: 0.55;
+				border-style: dashed;
+			}
+
+			// Spells granted by a class/subclass/race/feat feature — always prepared, can't be removed.
+			&--granted {
+				border-style: dotted;
+			}
+		}
+
+		&__spell-level {
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+		}
+
+		// Spell manager modal
+		&__spell-hdr {
+			border-bottom: 1px solid vars.$rgb-border-grey--muted;
+		}
+
+		// Left list + right preview pane (preview is inside the modal, avoiding hover-window z-index).
+		&__spell-list {
+			flex: 1 1 55%;
+			min-width: 0;
+			border-right: 1px solid vars.$rgb-border-grey--muted;
+		}
+
+		&__spell-preview {
+			flex: 1 1 45%;
+			min-width: 0;
+			padding: 8px 12px;
+		}
+
+		&__spell-row {
+			padding: 2px 4px;
+			border-radius: 6px;
+
+			&:hover {
+				background: rgba(0, 0, 0, 0.04);
+			}
+
+			&--on {
+				background: rgba(51, 122, 183, 0.08);
+			}
+		}
+
+		&__spell-name {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			cursor: default;
+		}
+
+		// Round selection toggle (a "dot" that fills when on).
+		&__spell-toggle {
+			appearance: none;
+			flex: 0 0 auto;
+			width: 18px;
+			height: 18px;
+			padding: 0;
+			border: 2px solid vars.$rgb-border-grey;
+			border-radius: 50%;
+			background: transparent;
+			cursor: pointer;
+
+			&:hover:not([disabled]) {
+				border-color: vars.$rgb-link-blue;
+			}
+
+			&[disabled] {
+				opacity: 0.35;
+				cursor: not-allowed;
+			}
+
+			&--on {
+				border-color: vars.$rgb-link-blue;
+				background: vars.$rgb-link-blue;
+			}
+
+			// The "prepared" toggle is a square to differentiate it from the round "known" toggle.
+			&--prep {
+				border-radius: 3px;
+			}
+		}
+
+		&__spell-info {
+			flex: 0 0 auto;
+		}
+
+		// -------- Inventory --------
+		&__currency {
+			padding-bottom: 6px;
+			border-bottom: 1px solid vars.$rgb-border-grey--muted;
+		}
+
+		&__coin-input {
+			width: 64px;
+		}
+
+		&__inv-rows {
+			gap: 2px;
+		}
+
+		&__inv-row {
+			padding: 3px 2px;
+			border-bottom: 1px solid vars.$rgb-border-grey--muted;
+
+			&:last-child {
+				border-bottom: 0;
+			}
+		}
+
+		&__inv-name {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		&__inv-qty-val {
+			min-width: 20px;
+			text-align: center;
+		}
+
+		&__inv-flag {
+			min-width: 22px;
+		}
+
+		// Add-item modal panes
+		&__inv-panes {
+			height: 100%;
+		}
+
+		&__inv-picker {
+			border-right: 1px solid vars.$rgb-border-grey--muted;
+		}
+
+		&__inv-picker-row {
+			padding: 3px 6px;
+			border-radius: 6px;
+			cursor: default;
+
+			&:hover {
+				background: rgba(0, 0, 0, 0.04);
+			}
+		}
+
+		&__inv-picker-name {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		&__inv-preview {
+			flex: 1 1 45%;
+			min-width: 0;
+			padding: 8px 12px;
+		}
+
+		&__inv-custom {
+			border: 1px solid vars.$rgb-border-grey--muted;
+			border-radius: 6px;
+			background: rgba(51, 122, 183, 0.06);
+		}
+
+		&__inv-custom-desc {
+			resize: vertical;
+			min-height: 60px;
+		}
+
+		&__inv-name-custom {
+			cursor: help;
+		}
+
+		&__no-border {
+			border: 0 !important;
+		}
+
+		// Two-column body
+		&__cols {
+			gap: 16px;
+			align-items: flex-start;
+		}
+
+		&__col-left {
+			gap: 12px;
+			flex: 0 0 300px;
+			max-width: 300px;
+		}
+
+		&__col-right {
+			gap: 12px;
+			flex: 1 1 auto;
+		}
+
+		// When the sheet is narrow (e.g. a slim DM Screen panel), stack the columns.
+		@container char-sheet (max-width: 620px) {
+			&__cols {
+				flex-direction: column;
+			}
+
+			&__col-left,
+			&__col-right {
+				flex: 1 1 auto;
+				max-width: none;
+				width: 100%;
+			}
+		}
+
+		// Generic panel
+		&__panel {
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 8px;
+			padding: 10px 12px;
+		}
+
+		&__panel-title {
+			font-weight: bold;
+			font-size: 1.05em;
+			margin-bottom: 6px;
+			padding-bottom: 4px;
+			border-bottom: 1px solid vars.$rgb-border-grey--muted;
+		}
+
+		// Abilities
+		&__abilities {
+			justify-content: space-between;
+		}
+
+		&__ability {
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 8px;
+			padding: 6px 8px;
+			min-width: 64px;
+			flex: 1 1 0;
+			text-align: center;
+		}
+
+		&__ability-mod {
+			font-size: 1.4em;
+			font-weight: bold;
+			line-height: 1.1;
+		}
+
+		&__ability-score {
+			font-size: 0.85em;
+		}
+
+		// Line rows (saves / skills / proficiencies)
+		&__line {
+			padding: 2px 2px;
+
+			& + & {
+				border-top: 1px solid vars.$rgb-border-grey--muted;
+			}
+		}
+
+		// Proficiency dots
+		&__prof-dot {
+			width: 11px;
+			height: 11px;
+			border-radius: 50%;
+			border: 1px solid vars.$rgb-border-grey;
+			display: inline-block;
+			flex: 0 0 auto;
+
+			&--proficient {
+				background-color: vars.$rgb-link-blue;
+				border-color: vars.$rgb-link-blue;
+			}
+
+			&--expertise {
+				background-color: vars.$rgb-link-blue;
+				border-color: vars.$rgb-link-blue;
+				box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6) inset;
+			}
+		}
+
+		// Spell slots
+		&__slot {
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 6px;
+			padding: 4px 8px;
+			min-width: 48px;
+			text-align: center;
+		}
+
+		&__slot-n {
+			font-size: 1.2em;
+		}
+
+		// Features
+		&__feature-tabs {
+			gap: 2px;
+			border-bottom: 1px solid vars.$rgb-border-grey;
+			margin-bottom: 8px;
+		}
+
+		&__feature-tab {
+			appearance: none;
+			background: transparent;
+			border: 1px solid transparent;
+			border-bottom: none;
+			border-radius: 4px 4px 0 0;
+			padding: 4px 12px;
+			cursor: pointer;
+			color: inherit;
+			margin-bottom: -1px;
+
+			&:hover {
+				background: vars.$rgb-border-grey--muted;
+			}
+
+			&--active {
+				border-color: vars.$rgb-border-grey;
+				background: #fff;
+				font-weight: bold;
+
+				&:hover {
+					background: #fff;
+				}
+			}
+		}
+
+		&__feature-bodies {
+			min-height: 0;
+		}
+
+		&__feature-body {
+			max-height: 560px;
+			overflow-y: auto;
+		}
+
+		&__feature {
+			padding-bottom: 6px;
+
+			& + & {
+				border-top: 1px solid vars.$rgb-border-grey--muted;
+				padding-top: 6px;
+			}
+		}
+	}
+	// endregion
+
+	// region Builder (rendered into a fullscreen modal, outside `.ve-char`)
+	.ve-char-builder {
+		min-height: 0;
+
+		&__nav {
+			width: 200px;
+			gap: 2px;
+			padding: 12px 8px;
+			border-right: 1px solid vars.$rgb-border-grey;
+		}
+
+		&__nav-btn {
+			display: flex;
+			align-items: center;
+			width: 100%;
+			padding: 8px 10px;
+			border: 1px solid transparent;
+			border-radius: 4px;
+			background: transparent;
+			color: inherit;
+			cursor: pointer;
+
+			&:hover {
+				background-color: vars.$rgb-border-grey--muted;
+			}
+
+			&--active {
+				background-color: vars.$rgb-link-blue;
+				color: #fff;
+				border-color: vars.$rgb-link-blue;
+
+				&:hover {
+					background-color: vars.$rgb-link-blue;
+				}
+			}
+		}
+
+		&__content {
+			min-height: 0;
+		}
+
+		&__preview {
+			border-top: 1px solid vars.$rgb-border-grey;
+			padding-top: 10px;
+			max-height: 360px;
+		}
+
+		&__class-row {
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 6px;
+		}
+
+		&__ipt-lvl,
+		&__ipt-score {
+			width: 100%;
+		}
+
+		&__score {
+			min-width: 28px;
+			text-align: center;
+			font-size: 1.1em;
+		}
+
+		&__ab-name {
+			min-width: 130px;
+		}
+
+		&__feat-row {
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 4px;
+		}
+
+		&__review-row {
+			border-bottom: 1px solid vars.$rgb-border-grey--muted;
+		}
+
+		&__equip-gold {
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 4px;
+			background-color: rgba(51, 122, 183, 0.06);
+		}
+	}
+	// endregion
+}

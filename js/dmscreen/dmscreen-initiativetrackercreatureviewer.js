@@ -1,5 +1,7 @@
 import {DmScreenUtil} from "./dmscreen-util.js";
 import {PANEL_TYP_INITIATIVE_TRACKER} from "./dmscreen-consts.js";
+import {CharactersStorage} from "../characters/characters-storage.js";
+import {CharacterSheet} from "../characters/characters-sheet.js";
 
 // TODO(Future) refactor to subclass `DmScreenPanelAppBase`; move state to `_comp`
 export class InitiativeTrackerCreatureViewer extends BaseComponent {
@@ -144,6 +146,18 @@ export class InitiativeTrackerCreatureViewer extends BaseComponent {
 		const lock = new VeLock({name: "Creature display"});
 
 		const hkCreature = async () => {
+			// region Linked player character (Characters tool) takes precedence
+			if (this._state.creatureCharacterId != null) {
+				const rendered = await this._pGetRenderedCharacter({id: this._state.creatureCharacterId});
+				if (rendered) {
+					dispCreature.empty();
+					rendered.appendTo(dispCreature);
+					return;
+				}
+				return dispCreature.innerHTML = `<div class="ve-dnd-font ve-italic ve-small-caps ve-muted ve-flex-vh-center ve-w-100 ve-h-100">Character not found.</div>`;
+			}
+			// endregion
+
 			const mon = (this._state.creatureName && this._state.creatureSource)
 				? await DmScreenUtil.pGetScaledCreature({
 					name: this._state.creatureName,
@@ -175,6 +189,19 @@ export class InitiativeTrackerCreatureViewer extends BaseComponent {
 		this._addHookBase("isActive", () => stg.toggleVe(this._state.isActive))();
 
 		return stg;
+	}
+
+	async _pGetRenderedCharacter ({id}) {
+		const characters = await CharactersStorage.pLoadAll();
+		const character = characters.find(it => it.id === id);
+		if (!character) return null;
+
+		const saveAllDebounced = CharactersStorage.getSaveAllDebounced();
+
+		const wrp = ee`<div class="ve-flex-col ve-w-100 dm__panel-bg"></div>`;
+		const sheet = new CharacterSheet({character, fnBack: null, fnEdit: null, fnOnChange: () => saveAllDebounced(characters)});
+		await sheet.pRender(wrp);
+		return wrp;
 	}
 
 	/* -------------------------------------------- */
@@ -213,6 +240,7 @@ export class InitiativeTrackerCreatureViewer extends BaseComponent {
 			creatureScaledCr: null,
 			creatureScaledSummonSpellLevel: null,
 			creatureScaledSummonClassLevel: null,
+			creatureCharacterId: null,
 			creaturePulse: false,
 		};
 	}

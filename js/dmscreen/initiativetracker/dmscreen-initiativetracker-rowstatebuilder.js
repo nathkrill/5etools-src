@@ -31,6 +31,7 @@ class _InitiativeTrackerRowStateBuilderBase {
 	 * @param {?number} ordinal
 	 * @param {?array} rowStatColData
 	 * @param {?array} conditions
+	 * @param {?string} characterId Id of a linked player character (from the Characters tool).
 	 */
 	async pGetNewRowState (
 		{
@@ -51,6 +52,7 @@ class _InitiativeTrackerRowStateBuilderBase {
 			ordinal = null,
 			rowStatColData = null,
 			conditions = null,
+			characterId = null,
 		} = {},
 	) {
 		if (rowStatColData == null) rowStatColData = this._getInitialRowStatColData();
@@ -73,6 +75,7 @@ class _InitiativeTrackerRowStateBuilderBase {
 				ordinal,
 				rowStatColData: rowStatColData ?? [],
 				conditions: conditions ?? [],
+				characterId,
 			},
 		};
 	}
@@ -152,6 +155,7 @@ export class InitiativeTrackerRowStateBuilderActive extends _InitiativeTrackerRo
 			ordinal = null,
 			rowStatColData = null,
 			conditions = null,
+			characterId = null,
 		} = {},
 	) {
 		const isMon = !!(name && source);
@@ -213,6 +217,7 @@ export class InitiativeTrackerRowStateBuilderActive extends _InitiativeTrackerRo
 				ordinal,
 				rowStatColData: rowStatColData ?? [],
 				conditions: conditions ?? [],
+				characterId,
 			},
 		};
 	}
