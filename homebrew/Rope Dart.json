@@ -1,0 +1,47 @@
+{
+	"_meta": {
+		"sources": [
+			{
+				"json": "RopeDart",
+				"abbreviation": "RD",
+				"full": "Rope Dart (Homebrew)",
+				"authors": [
+					"Homebrew"
+				],
+				"convertedBy": [
+					"Homebrew"
+				],
+				"version": "1.0.0"
+			}
+		],
+		"dateAdded": 1782518400,
+		"dateLastModified": 1782518400
+	},
+	"item": [
+		{
+			"name": "Rope Dart",
+			"source": "RopeDart",
+			"type": "M|XPHB",
+			"rarity": "none",
+			"weight": 1,
+			"value": 200,
+			"weaponCategory": "simple",
+			"property": [
+				"F|XPHB",
+				"R|XPHB",
+				"L|XPHB",
+				"T|XPHB"
+			],
+			"mastery": [
+				"Slow|XPHB"
+			],
+			"range": "20/60",
+			"dmg1": "1d4",
+			"dmgType": "P",
+			"weapon": true,
+			"entries": [
+				"A rope dart is a whip-like weapon consisting of a metal dart attached to a long rope. It functions as a {@item whip|XPHB} with the Finesse and Reach properties and the Slow weapon mastery, but it deals damage and is otherwise treated as a {@item dagger|XPHB}, making it a Light simple weapon you can throw."
+			]
+		}
+	]
+}
