@@ -527,6 +527,87 @@
 				padding-top: 6px;
 			}
 		}
+
+		// Abilities & Actions
+		&__act-tabs {
+			gap: 2px;
+			border-bottom: 1px solid vars.$rgb-border-grey;
+			margin-bottom: 8px;
+			flex-wrap: wrap;
+		}
+
+		&__act-tab {
+			appearance: none;
+			background: transparent;
+			border: 1px solid transparent;
+			border-bottom: none;
+			border-radius: 4px 4px 0 0;
+			padding: 4px 10px;
+			cursor: pointer;
+			color: inherit;
+			margin-bottom: -1px;
+
+			&:hover {
+				background: vars.$rgb-border-grey--muted;
+			}
+
+			&--active {
+				border-color: vars.$rgb-border-grey;
+				background: #fff;
+				font-weight: bold;
+
+				&:hover {
+					background: #fff;
+				}
+			}
+		}
+
+		&__act-body {
+			max-height: 560px;
+			overflow-y: auto;
+		}
+
+		&__act {
+			padding: 6px 0;
+
+			& + & {
+				border-top: 1px solid vars.$rgb-border-grey--muted;
+			}
+		}
+
+		&__act-name {
+			// Keep the rendered `{@item}` link inheriting the row's bold styling.
+			font-weight: bold;
+		}
+
+		&__act-menu {
+			flex: 0 0 auto;
+		}
+
+		&__act-attack {
+			// Clickable to-hit / damage rolls render as inline dice; give them breathing room.
+			line-height: 1.8;
+		}
+
+		&__act-tohit,
+		&__act-dmg {
+			padding: 1px 6px;
+			border: 1px solid vars.$rgb-border-grey;
+			border-radius: 4px;
+			background: transparent;
+
+			&:hover {
+				border-color: vars.$rgb-link-blue;
+				background: rgba(0, 0, 0, 0.03);
+			}
+		}
+
+		&__act-uses {
+			.ve-char-sheet__slot-pip {
+				width: 13px;
+				height: 13px;
+			}
+		}
 	}
 	// endregion
 

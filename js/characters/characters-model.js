@@ -7,7 +7,7 @@
  * allowing the underlying data to update over time.
  */
 export class CharacterModel {
-	static SCHEMA_VERSION = 1;
+	static SCHEMA_VERSION = 2;
 
 	static ABILITIES = ["str", "dex", "con", "int", "wis", "cha"];
 
@@ -96,6 +96,10 @@ export class CharacterModel {
 
 			currency: {pp: 0, gp: 0, ep: 0, sp: 0, cp: 0},
 
+			// Abilities & Actions play-state, keyed by a stable ability id (see CharactersActions).
+			abilityUses: {}, // {abilityId: {used, max, resetOn}}
+			abilityOverrides: {}, // {abilityId: category} manual action-economy tab re-assignment
+
 			notes: "",
 		};
 	}
@@ -120,7 +124,13 @@ export class CharacterModel {
 	static migrate (character) {
 		if (character == null) return character;
 		character.schemaVersion ||= 1;
-		// Future migrations branch on schemaVersion here.
+
+		// v1 -> v2: introduce Abilities & Actions play-state.
+		if (character.schemaVersion < 2) {
+			character.abilityUses ||= {};
+			character.abilityOverrides ||= {};
+		}
+
 		character.schemaVersion = this.SCHEMA_VERSION;
 		return character;
 	}

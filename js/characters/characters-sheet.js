@@ -1,6 +1,7 @@
 import {CharacterModel} from "./characters-model.js";
 import {CharactersCalc} from "./characters-calc.js";
 import {CharactersDataUtil} from "./characters-data.js";
+import {CharactersActions} from "./characters-actions.js";
 
 /**
  * Renders a read-only-ish digital character sheet from a character object, using the
@@ -25,6 +26,7 @@ export class CharacterSheet {
 
 		this._classInfos = []; // [{ref, cls, subclass}]
 		this._race = null; // resolved race entity (or null)
+		this._background = null; // resolved background entity (or null)
 		this._feats = []; // resolved feat entities
 		this._knownSpells = []; // resolved known/prepared spell entities (parallel to character.spells.known)
 		this._grantedSpells = []; // spells auto-granted via additionalSpells: [{ref, ent, sourceLabel, kind}]
@@ -38,9 +40,10 @@ export class CharacterSheet {
 		wrp.empty();
 
 		const ch = this._character;
-		[this._classInfos, this._race, this._feats, this._knownSpells, this._inventory] = await Promise.all([
+		[this._classInfos, this._race, this._background, this._feats, this._knownSpells, this._inventory] = await Promise.all([
 			CharactersDataUtil.pGetCharacterClasses(ch),
 			ch.race ? CharactersDataUtil.pGetRace(ch.race) : Promise.resolve(null),
+			ch.background ? CharactersDataUtil.pGetBackground(ch.background) : Promise.resolve(null),
 			Promise.all((ch.feats || []).map(ref => CharactersDataUtil.pGetFeat(ref))).then(arr => arr.filter(Boolean)),
 			Promise.all((ch.spells?.known || []).map(ref => CharactersDataUtil.pGetEntity(ref).then(ent => ent ? {ref, ent} : null))).then(arr => arr.filter(Boolean)),
 			CharactersDataUtil.pGetCharacterInventory(ch),
@@ -72,6 +75,7 @@ export class CharacterSheet {
 				</div>
 				<div class="ve-char-sheet__col-right ve-flex-col ve-min-w-0">
 					${this._renderProficiencies()}
+					${this._renderAbilitiesActions()}
 					${this._renderSpellcasting()}
 					${this._renderInventory()}
 					${this._renderFeatures()}
@@ -537,7 +541,15 @@ export class CharacterSheet {
 		renderRows();
 
 		const btnDone = ee`<button class="ve-btn ve-btn-default ve-mt-2">Done</button>`
-			.onn("click", () => doClose());
+			.onn("click", () => {
+				// Recover short-rest abilities on completing the rest.
+				if (this._resetAbilityUses([CharactersActions.RESET_SHORT])) {
+					if (this._fnOnChange) this._fnOnChange();
+					doClose();
+					return this.pRender(this._wrp);
+				}
+				doClose();
+			});
 
 		ee`<div class="ve-flex-col">
 			${wrpBody}
@@ -571,6 +583,9 @@ export class CharacterSheet {
 		// Spell slots
 		Object.values(ch.spells?.slots || {}).forEach(slot => { slot.used = 0; });
 
+		// Limited-use abilities — a long rest also satisfies anything that recovers on a short rest.
+		this._resetAbilityUses([CharactersActions.RESET_SHORT, CharactersActions.RESET_LONG]);
+
 		// Hit dice — recover up to `recovery` spent dice, preferring larger dice first.
 		const pools = this._ensureHitDice();
 		let recovery = CharactersCalc.getLongRestHitDiceRecovery(ch);
@@ -586,6 +601,23 @@ export class CharacterSheet {
 
 		if (this._fnOnChange) this._fnOnChange();
 		return this.pRender(this._wrp);
+	}
+
+	/**
+	 * Reset the "used" count to 0 for every tracked ability whose `resetOn` is in `resetKinds`.
+	 * @return {boolean} Whether any record was actually changed.
+	 */
+	_resetAbilityUses (resetKinds) {
+		const ch = this._character;
+		const kinds = new Set(resetKinds);
+		let changed = false;
+		Object.values(ch.abilityUses || {}).forEach(rec => {
+			if (!rec || !kinds.has(rec.resetOn)) return;
+			if ((rec.used || 0) === 0) return;
+			rec.used = 0;
+			changed = true;
+		});
+		return changed;
 	}
 
 	/* -------------------------------------------- Inventory -------------------------------------------- */
@@ -1503,6 +1535,265 @@ export class CharacterSheet {
 			${summary}
 			${levelBlocks}
 		</div>`;
+	}
+
+	/* -------------------------------------------- Abilities & Actions -------------------------------------------- */
+
+	/**
+	 * Render the "Abilities & Actions" panel: every ability the character can use (equipped-weapon
+	 * attacks plus class/subclass, racial, feat, and background features), grouped into
+	 * Action / Bonus Action / Reaction / Passive tabs. Where an ability rolls dice the player can
+	 * click to roll; where it has limited uses those are tracked as pips and auto-deducted.
+	 */
+	_renderAbilitiesActions () {
+		const ch = this._character;
+		ch.abilityUses = ch.abilityUses || {};
+		ch.abilityOverrides = ch.abilityOverrides || {};
+
+		const abilities = CharactersActions.getAbilities({
+			character: ch,
+			classInfos: this._classInfos,
+			race: this._race,
+			feats: this._feats,
+			background: this._background,
+			inventory: this._inventory,
+		});
+
+		const wrp = ee`<div class="ve-char-sheet__panel ve-char-sheet__actions">
+			<div class="ve-char-sheet__panel-title">Abilities &amp; Actions</div>
+		</div>`;
+
+		if (!abilities.length) {
+			ee`<div class="ve-muted ve-italic ve-py-2">No abilities or actions available yet. Equip a weapon or add class/race/feat/background features.</div>`.appendTo(wrp);
+			return wrp;
+		}
+
+		const byCat = CharactersActions.groupByCategory(abilities);
+
+		const wrpTabBtns = ee`<div class="ve-char-sheet__act-tabs ve-flex"></div>`.appendTo(wrp);
+		const wrpTabBodies = ee`<div class="ve-char-sheet__act-bodies"></div>`.appendTo(wrp);
+
+		const btns = [];
+		const bodies = [];
+		const fnSelect = (ix) => {
+			btns.forEach((btn, i) => btn.toggleClass("ve-char-sheet__act-tab--active", i === ix));
+			bodies.forEach((body, i) => body.toggleVe(i === ix));
+		};
+
+		CharactersActions.CATEGORIES.forEach((cat, ix) => {
+			const list = byCat[cat.id] || [];
+
+			const btn = ee`<button class="ve-char-sheet__act-tab">${cat.name.qq()} <span class="ve-muted">(${list.length})</span></button>`
+				.onn("click", () => fnSelect(ix))
+				.appendTo(wrpTabBtns);
+			btns.push(btn);
+
+			const body = ee`<div class="ve-char-sheet__act-body"></div>`.appendTo(wrpTabBodies);
+			bodies.push(body);
+
+			if (!list.length) {
+				ee`<div class="ve-muted ve-italic ve-py-2">Nothing here.</div>`.appendTo(body);
+			} else {
+				list.forEach(ab => this._renderAbilityRow(ab).appendTo(body));
+			}
+		});
+
+		// Default to the first non-empty action tab for a useful initial view.
+		const firstNonEmpty = CharactersActions.CATEGORIES.findIndex(cat => (byCat[cat.id] || []).length);
+		fnSelect(firstNonEmpty < 0 ? 0 : firstNonEmpty);
+
+		return wrp;
+	}
+
+	/** Render a single ability row (weapon attack or feature), with rolls and a uses tracker. */
+	_renderAbilityRow (ab) {
+		return ab.kind === "weapon"
+			? this._renderWeaponAbilityRow(ab)
+			: this._renderFeatureAbilityRow(ab);
+	}
+
+	/** Render an equipped-weapon attack: name, to-hit roll, and one or more damage rolls. */
+	_renderWeaponAbilityRow (ab) {
+		const renderer = Renderer.get();
+		const w = ab.weapon;
+
+		const nameLink = renderer.render(`{@item ${ab.ent.name}|${ab.ent.source}}`);
+
+		const meta = [];
+		meta.push(w.abil.toUpperCase());
+		if (w.isRanged) meta.push("ranged");
+		if (!w.isProficient) meta.push("not proficient");
+		if (w.range) meta.push(`${w.range} ft.`);
+
+		// To-hit: a clickable d20 roll via the shared packed-dice mechanism.
+		const toHit = renderer.render(`{@d20 ${w.toHit >= 0 ? "+" : ""}${w.toHit}|${CharactersCalc.fmtBonus(w.toHit)}|${ab.ent.name} attack}`);
+
+		const dmgEles = w.damage.map(d => {
+			const typeFull = d.type ? Parser.dmgTypeToFull(d.type) : "";
+			const rolled = renderer.render(`{@damage ${d.formula}|${d.formula}|${ab.ent.name} ${d.label.toLowerCase()}${d.type ? `|${d.type}` : ""}}`);
+			return ee`<span class="ve-char-sheet__act-dmg ve-flex-v-center ve-char__gap-1" title="${d.label.qq()}${typeFull ? ` (${typeFull})` : ""}">${rolled}${typeFull ? ee`<span class="ve-muted ve-small">${typeFull.qq()}</span>` : ""}</span>`;
+		});
+
+		return ee`<div class="ve-char-sheet__act ve-char-sheet__act--weapon ve-mb-2">
+			<div class="ve-char-sheet__act-head ve-flex-v-center ve-split-v-center ve-char__gap-2">
+				<span class="ve-char-sheet__act-name ve-bold ve-flex-1 ve-min-w-0">${nameLink}</span>
+				${this._getAbilityMenuBtn(ab)}
+			</div>
+			<div class="ve-char-sheet__act-attack ve-flex-v-center ve-flex-wrap ve-char__gap-2 ve-mt-1">
+				<span class="ve-char-sheet__act-tohit ve-flex-v-center ve-char__gap-1" title="Attack roll">
+					<span class="ve-muted ve-small">Hit</span>${toHit}
+				</span>
+				${dmgEles}
+			</div>
+			<div class="ve-muted ve-small ve-mt-1">${meta.join(" \u2022 ").qq()}</div>
+		</div>`;
+	}
+
+	/** Render a feature ability: rendered description, plus a uses tracker when applicable. */
+	_renderFeatureAbilityRow (ab) {
+		const renderer = Renderer.get().setFirstSection(true);
+		const rendered = renderer.render({type: "entries", name: ab.name, entries: ab.entries}, 1);
+
+		const tracker = this._renderAbilityUses(ab);
+
+		return ee`<div class="ve-char-sheet__act ve-char-sheet__act--feature rd__b ve-mb-2">
+			<div class="ve-char-sheet__act-head ve-flex-v-center ve-split-v-center ve-char__gap-2">
+				<span class="ve-char-sheet__act-src ve-muted ve-small">${ab.sourceLabel.qq()}</span>
+				${this._getAbilityMenuBtn(ab)}
+			</div>
+			${rendered}
+			${tracker}
+		</div>`;
+	}
+
+	/**
+	 * Render the limited-use tracker for an ability (one pip per use; click toggles spent/available),
+	 * merging the auto-detected budget with any player-saved state. Returns "" when the ability has
+	 * no tracked uses (and none configured manually).
+	 */
+	_renderAbilityUses (ab) {
+		const ch = this._character;
+		const stored = ch.abilityUses[ab.id];
+		// Prefer stored (player-edited) budget; else fall back to the auto-detected one.
+		const detected = ab.uses;
+		const max = stored?.max ?? detected?.max ?? 0;
+		if (!max) {
+			// No tracked uses; offer an "Add tracking" affordance via the menu only.
+			return "";
+		}
+
+		const resetOn = stored?.resetOn ?? detected?.resetOn ?? CharactersActions.RESET_LONG;
+		const used = Math.min(stored?.used || 0, max);
+		// Persist a normalized record so subsequent rest/reset logic has something to act on.
+		ch.abilityUses[ab.id] = {used, max, resetOn};
+
+		const pips = [];
+		for (let i = 0; i < max; ++i) {
+			const isUsed = i < used;
+			const pip = ee`<button class="ve-char-sheet__slot-pip ${isUsed ? "ve-char-sheet__slot-pip--used" : ""}" title="${isUsed ? "Expended" : "Available"} \u2022 click to toggle"></button>`
+				.onn("click", () => this._toggleAbilityUse(ab.id, i));
+			pips.push(pip);
+		}
+
+		const resetLabel = resetOn === CharactersActions.RESET_SHORT ? "short rest" : resetOn === CharactersActions.RESET_LONG ? "long rest" : "manual";
+
+		return ee`<div class="ve-char-sheet__act-uses ve-flex-v-center ve-char__gap-2 ve-mt-1">
+			<span class="ve-muted ve-small ve-bold">Uses</span>
+			<span class="ve-flex ve-char__gap-1 ve-flex-wrap">${pips}</span>
+			<span class="ve-muted ve-small">${max - used}/${max}</span>
+			<span class="ve-muted ve-small ve-italic">resets: ${resetLabel.qq()}</span>
+		</div>`;
+	}
+
+	/** Toggle a single use pip's expended state (mirrors spell-slot toggling). */
+	_toggleAbilityUse (id, ix) {
+		const ch = this._character;
+		const rec = ch.abilityUses[id];
+		if (!rec) return;
+		const used = rec.used || 0;
+		rec.used = ix < used ? ix : ix + 1;
+		rec.used = Math.max(0, Math.min(rec.max, rec.used));
+		if (this._fnOnChange) this._fnOnChange();
+		return this.pRender(this._wrp);
+	}
+
+	/** A small "gear" button that opens the per-ability override / uses editor. */
+	_getAbilityMenuBtn (ab) {
+		return ee`<button class="ve-char-sheet__act-menu ve-btn ve-btn-xxs ve-btn-default" title="Configure this ability (tab &amp; uses)"><span class="glyphicon glyphicon-cog"></span></button>`
+			.onn("click", () => this._pOpenAbilityConfig(ab));
+	}
+
+	/** Open the per-ability config modal: reassign the action-economy tab and edit limited uses. */
+	async _pOpenAbilityConfig (ab) {
+		const ch = this._character;
+		ch.abilityUses = ch.abilityUses || {};
+		ch.abilityOverrides = ch.abilityOverrides || {};
+
+		const {eleModalInner, doClose} = UiUtil.getShowModal({
+			title: `Configure \u2014 ${ab.name}`,
+			isMinHeight0: true,
+			cbClose: () => {},
+		});
+
+		// --- Tab (category) override ---
+		const curCat = ch.abilityOverrides[ab.id] || ab.category;
+		const selCat = ee`<select class="form-control input-sm"></select>`;
+		CharactersActions.CATEGORIES.forEach(cat => {
+			ee`<option value="${cat.id}" ${cat.id === curCat ? "selected" : ""}>${cat.name.qq()}</option>`.appendTo(selCat);
+		});
+
+		// --- Uses editor ---
+		const cur = ch.abilityUses[ab.id] || ab.uses || {max: 0, resetOn: CharactersActions.RESET_LONG};
+		const iptMax = ee`<input class="form-control input-sm ve-text-right" type="number" min="0" step="1" value="${Math.max(0, Number(cur.max) || 0)}">`;
+		const selReset = ee`<select class="form-control input-sm"></select>`;
+		[
+			{v: CharactersActions.RESET_LONG, n: "Long rest"},
+			{v: CharactersActions.RESET_SHORT, n: "Short or long rest"},
+			{v: CharactersActions.RESET_NONE, n: "Manual only"},
+		].forEach(o => {
+			ee`<option value="${o.v}" ${o.v === (cur.resetOn || CharactersActions.RESET_LONG) ? "selected" : ""}>${o.n.qq()}</option>`.appendTo(selReset);
+		});
+
+		const btnSave = ee`<button class="ve-btn ve-btn-primary ve-mt-2">Save</button>`
+			.onn("click", () => {
+				// Tab override (drop when it matches the auto-detected category).
+				const catVal = selCat.val();
+				if (catVal && catVal !== ab.category) ch.abilityOverrides[ab.id] = catVal;
+				else delete ch.abilityOverrides[ab.id];
+
+				// Uses (drop the record entirely when max is 0).
+				const max = Math.max(0, Math.floor(Number(iptMax.val()) || 0));
+				if (max > 0) {
+					const prev = ch.abilityUses[ab.id] || {};
+					ch.abilityUses[ab.id] = {
+						used: Math.min(prev.used || 0, max),
+						max,
+						resetOn: selReset.val() || CharactersActions.RESET_LONG,
+					};
+				} else {
+					delete ch.abilityUses[ab.id];
+				}
+
+				if (this._fnOnChange) this._fnOnChange();
+				doClose();
+				this.pRender(this._wrp);
+			});
+
+		ee`<div class="ve-flex-col ve-char__gap-3 ve-p-1">
+			<label class="ve-flex-col ve-char__gap-1">
+				<span class="ve-muted ve-small ve-bold">Action type (tab)</span>
+				${selCat}
+			</label>
+			<div class="ve-flex-col ve-char__gap-1">
+				<span class="ve-muted ve-small ve-bold">Limited uses</span>
+				<div class="ve-flex-v-center ve-char__gap-2">
+					<label class="ve-flex-v-center ve-char__gap-1"><span class="ve-muted ve-small">Max</span>${iptMax}</label>
+					<label class="ve-flex-v-center ve-char__gap-1"><span class="ve-muted ve-small">Resets on</span>${selReset}</label>
+				</div>
+				<span class="ve-muted ve-small ve-italic">Set Max to 0 to remove tracking.</span>
+			</div>
+			<div class="ve-flex-h-right">${btnSave}</div>
+		</div>`.appendTo(eleModalInner);
 	}
 
 	/* -------------------------------------------- Features -------------------------------------------- */

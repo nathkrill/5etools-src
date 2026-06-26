@@ -46,6 +46,41 @@
 			}
 		}
 
+		// Abilities & Actions
+		&__act,
+		&__act + &__act {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__act-tabs {
+			border-bottom-color: vars-night.$rgb-border-grey--trans-night;
+		}
+
+		&__act-tab {
+			&:hover {
+				background: vars-night.$rgb-bg--alt-night;
+			}
+
+			&--active {
+				border-color: vars-night.$rgb-border-grey--trans-night;
+				background: vars-night.$rgb-bg--alt-night;
+
+				&:hover {
+					background: vars-night.$rgb-bg--alt-night;
+				}
+			}
+		}
+
+		&__act-tohit,
+		&__act-dmg {
+			border-color: vars-night.$rgb-border-grey--trans-night;
+
+			&:hover {
+				border-color: vars-night.$rgb-link-blue--muted-night;
+				background: vars-night.$rgb-bg--alt-night;
+			}
+		}
+
 		&__tile--clickable:hover,
 		&__roll:hover {
 			background: vars-night.$rgb-bg--alt-night;
