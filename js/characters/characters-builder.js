@@ -30,9 +30,15 @@ export class CharacterBuilder {
 			classes: this._initClasses(character), // [{ref, level, subclass}]
 			background: character?.background || null,
 			feats: character?.feats ? MiscUtil.copyFast(character.feats) : [],
+			// Chosen optional features (e.g. Eldritch Invocations). [{page, source, hash}]
+			optionalFeatures: character?.optionalFeatures ? MiscUtil.copyFast(character.optionalFeatures) : [],
 			abilityMode: "pointbuy", // pointbuy | standard | manual
 			abilityScores: {str: 8, dex: 8, con: 8, int: 8, wis: 8, cha: 8},
 			standardAssign: {str: null, dex: null, con: null, int: null, wis: null, cha: null},
+			// Chosen race/background ability-score bonuses, keyed by a stable group id.
+			//   - `choose.from` groups -> string[] of chosen ability abvs
+			//   - `choose.weighted` groups -> { "<weightIx>": "<abv>" } assigning each weight slot to an ability
+			abilityChoices: character?._builder?.abilityChoices ? MiscUtil.copyFast(character._builder.abilityChoices) : {},
 			// Chosen skills for each "choose" proficiency group, keyed by a stable group id -> string[]
 			skillChoices: character?._builder?.skillChoices ? MiscUtil.copyFast(character._builder.skillChoices) : {},
 			// Chosen tools for each "choose" tool-proficiency group, keyed by a stable group id -> string[]
@@ -45,7 +51,11 @@ export class CharacterBuilder {
 
 		if (this._isEdit && character?.abilities) {
 			this._state.abilityMode = "manual";
+			// Stored `abilities` are FINAL scores (racial/background bonuses baked in). Recover the base
+			// scores by subtracting the previously-applied bonuses, so bonuses aren't double-counted on
+			// re-save. Bonus sources are resolved lazily (data isn't loaded yet), so defer via a flag.
 			this._state.abilityScores = {...character.abilities};
+			this._needsRebaseAbilityScores = true;
 		}
 
 		// Loaded data lists
@@ -53,6 +63,7 @@ export class CharacterBuilder {
 		this._dataClasses = null;
 		this._dataBackgrounds = null;
 		this._dataFeats = null;
+		this._dataOptionalFeatures = null;
 
 		// Modal handles
 		this._modal = null;
@@ -83,6 +94,7 @@ export class CharacterBuilder {
 		{id: "proficiencies", name: "Proficiencies", icon: "fa-list-check"},
 		{id: "equipment", name: "Equipment", icon: "fa-briefcase"},
 		{id: "feats", name: "Feats", icon: "fa-star"},
+		{id: "invocations", name: "Invocations", icon: "fa-hand-sparkles"},
 		{id: "review", name: "Review", icon: "fa-clipboard-check"},
 	];
 
@@ -114,12 +126,22 @@ export class CharacterBuilder {
 	}
 
 	async _pLoadData () {
-		[this._dataRaces, this._dataClasses, this._dataBackgrounds, this._dataFeats] = await Promise.all([
+		[this._dataRaces, this._dataClasses, this._dataBackgrounds, this._dataFeats, this._dataOptionalFeatures] = await Promise.all([
 			CharactersDataUtil.pLoadRaces(),
 			CharactersDataUtil.pLoadClasses(),
 			CharactersDataUtil.pLoadBackgrounds(),
 			CharactersDataUtil.pLoadFeats(),
+			CharactersDataUtil.pLoadEldritchInvocations(),
 		]);
+
+		// When editing, the loaded `abilities` include previously-applied racial/background bonuses.
+		// Now that the data (and thus the bonus sources) are available, subtract them to recover the
+		// user's base scores; bonuses are re-applied on save via `_getFinalAbilityScores`.
+		if (this._needsRebaseAbilityScores) {
+			const bonuses = this._getResolvedAbilityBonuses();
+			CharacterModel.ABILITIES.forEach(ab => { this._state.abilityScores[ab] -= (bonuses[ab] || 0); });
+			this._needsRebaseAbilityScores = false;
+		}
 	}
 
 	/* -------------------------------------------- Layout -------------------------------------------- */
@@ -201,6 +223,7 @@ export class CharacterBuilder {
 			case "proficiencies": this._renderStepProficiencies(); break;
 			case "equipment": this._renderStepEquipment(); break;
 			case "feats": this._renderStepFeats(); break;
+			case "invocations": this._renderStepInvocations(); break;
 			case "review": this._renderStepReview(); break;
 		}
 		this._updateFooterButtons();
@@ -444,17 +467,251 @@ export class CharacterBuilder {
 			btn.appendTo(wrpMode);
 		});
 
+		ee`<div class="ve-muted ve-mb-3">Enter your <i>base</i> scores below. Racial and background bonuses are added on top (see "Racial &amp; Background Bonuses").</div>`.appendTo(wrp);
+
 		const wrpBody = ee`<div class="ve-flex-col ve-w-100"></div>`.appendTo(wrp);
 		switch (this._state.abilityMode) {
 			case "pointbuy": this._renderAbilitiesPointBuy(wrpBody); break;
 			case "standard": this._renderAbilitiesStandard(wrpBody); break;
 			case "manual": this._renderAbilitiesManual(wrpBody); break;
 		}
+
+		this._renderAbilityBonusPanel(wrp);
 	}
 
-	_getRaceAbilityBonusText () {
-		// Display flat racial ability bonuses if unambiguous; choose-style bonuses are noted generically.
-		return null;
+	/* -------------------------------------------- Race/Background ability bonuses -------------------------------------------- */
+
+	/**
+	 * Resolve the selected race and background entities to their `ability` arrays.
+	 * @return {Array<{srcKey: string, srcLabel: string, ability: Array}>}
+	 */
+	_getAbilityBonusSources () {
+		const out = [];
+
+		if (this._state.race) {
+			const race = this._findByHash(this._dataRaces, UrlUtil.PG_RACES, this._state.race.hash);
+			if (race?.ability?.length) out.push({srcKey: "race", srcLabel: race.name, ability: race.ability});
+		}
+
+		if (this._state.background) {
+			const bg = this._findByHash(this._dataBackgrounds, UrlUtil.PG_BACKGROUNDS, this._state.background.hash);
+			if (bg?.ability?.length) out.push({srcKey: "bg", srcLabel: bg.name, ability: bg.ability});
+		}
+
+		return out;
+	}
+
+	/**
+	 * Flatten each bonus source into descriptors the UI/resolver can consume. Each source's `ability`
+	 * array is a list of alternative blocks ("choose one of"); we use the first block (index 0), as
+	 * multi-block sources are rare and default to the first option.
+	 * @return {{fixed: Object, groups: Array}} `fixed` is an ability->bonus map of flat bonuses across
+	 *   all sources; `groups` is a list of choice-group descriptors.
+	 */
+	_getAbilityBonusData () {
+		const fixed = {};
+		const groups = [];
+
+		this._getAbilityBonusSources().forEach(({srcKey, srcLabel, ability}) => {
+			const block = ability[0];
+			if (!block) return;
+
+			// Flat bonuses on the block (e.g. {str: -2, dex: 2}).
+			CharacterModel.ABILITIES.forEach(ab => {
+				if (typeof block[ab] === "number" && block[ab] !== 0) fixed[ab] = (fixed[ab] || 0) + block[ab];
+			});
+
+			if (!block.choose) return;
+
+			if (block.choose.from) {
+				const from = block.choose.from.filter(it => CharacterModel.ABILITIES.includes(it));
+				const count = block.choose.count ?? 1;
+				const amount = block.choose.amount ?? 1;
+				groups.push({
+					id: `${srcKey}:choose`,
+					srcLabel,
+					kind: "from",
+					from,
+					count,
+					amount,
+				});
+			} else if (block.choose.weighted) {
+				const from = block.choose.weighted.from.filter(it => CharacterModel.ABILITIES.includes(it));
+				const weights = [...(block.choose.weighted.weights || [])];
+				groups.push({
+					id: `${srcKey}:weighted`,
+					srcLabel,
+					kind: "weighted",
+					from,
+					weights,
+				});
+			}
+		});
+
+		return {fixed, groups};
+	}
+
+	/** Resolved total ability-score bonuses (fixed + chosen), as an ability->bonus map. */
+	_getResolvedAbilityBonuses () {
+		const out = {str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0};
+		const {fixed, groups} = this._getAbilityBonusData();
+
+		Object.entries(fixed).forEach(([ab, v]) => { out[ab] += v; });
+
+		groups.forEach(group => {
+			if (group.kind === "from") {
+				const chosen = this._state.abilityChoices[group.id] || [];
+				chosen.forEach(ab => { if (out[ab] != null) out[ab] += group.amount; });
+			} else if (group.kind === "weighted") {
+				const assign = this._state.abilityChoices[group.id] || {};
+				group.weights.forEach((wt, ix) => {
+					const ab = assign[ix];
+					if (ab && out[ab] != null) out[ab] += wt;
+				});
+			}
+		});
+
+		return out;
+	}
+
+	/** Remove any stored choices for groups that no longer exist. */
+	_pruneAbilityChoices (groups) {
+		const liveIds = new Set(groups.map(g => g.id));
+		Object.keys(this._state.abilityChoices).forEach(id => { if (!liveIds.has(id)) delete this._state.abilityChoices[id]; });
+	}
+
+	_renderAbilityBonusPanel (parent) {
+		const {fixed, groups} = this._getAbilityBonusData();
+		this._pruneAbilityChoices(groups);
+
+		const sources = this._getAbilityBonusSources();
+		if (!sources.length) return;
+
+		const wrpPanel = ee`<div class="ve-char-builder__class-row ve-flex-col ve-w-100 ve-p-3 ve-mt-4"></div>`.appendTo(parent);
+		ee`<h5 class="ve-mt-0 ve-mb-2">Racial &amp; Background Bonuses</h5>`.appendTo(wrpPanel);
+
+		// Fixed bonuses summary.
+		const fixedParts = CharacterModel.ABILITIES
+			.filter(ab => fixed[ab])
+			.map(ab => `${ab.toUpperCase()} ${fixed[ab] >= 0 ? "+" : ""}${fixed[ab]}`);
+		if (fixedParts.length) {
+			ee`<div class="ve-muted ve-mb-2">Fixed: ${fixedParts.join(" \u2022 ").qq()}</div>`.appendTo(wrpPanel);
+		} else if (!groups.length) {
+			ee`<div class="ve-muted ve-mb-2">This race/background grants no ability score increases.</div>`.appendTo(wrpPanel);
+		}
+
+		groups.forEach(group => {
+			if (group.kind === "from") this._renderAbilityChoiceFrom(wrpPanel, group);
+			else if (group.kind === "weighted") this._renderAbilityChoiceWeighted(wrpPanel, group);
+		});
+
+		this._renderAbilityFinalPreview(wrpPanel);
+	}
+
+	_renderAbilityChoiceFrom (parent, group) {
+		const chosen = this._state.abilityChoices[group.id] ||= [];
+		// Drop chosen abilities no longer available.
+		const filtered = chosen.filter(ab => group.from.includes(ab));
+		if (filtered.length !== chosen.length) this._state.abilityChoices[group.id] = filtered;
+
+		const cur = this._state.abilityChoices[group.id];
+		const remaining = group.count - cur.length;
+		const amountTxt = `+${group.amount}`;
+
+		const wrpGroup = ee`<div class="ve-flex-col ve-w-100 ve-mb-2"></div>`.appendTo(parent);
+		ee`<div class="ve-split-v-center ve-w-100 ve-mb-1">
+			<span class="ve-bold">${group.srcLabel.qq()}: choose ${group.count} (${amountTxt} each)</span>
+			<span class="${remaining < 0 ? "text-danger" : "ve-muted"}">${remaining} remaining</span>
+		</div>`.appendTo(wrpGroup);
+
+		const wrpChecks = ee`<div class="ve-flex-wrap ve-w-100 ve-char__gap-2"></div>`.appendTo(wrpGroup);
+
+		group.from.forEach(ab => {
+			const isChecked = cur.includes(ab);
+			const isAtLimit = !isChecked && remaining <= 0;
+
+			const cb = ee`<input type="checkbox" class="ve-mr-1" ${isChecked ? "checked" : ""} ${isAtLimit ? "disabled" : ""}>`
+				.onn("change", () => {
+					const list = this._state.abilityChoices[group.id];
+					if (cb.checked) {
+						if (!list.includes(ab)) list.push(ab);
+					} else {
+						const ix = list.indexOf(ab);
+						if (ix >= 0) list.splice(ix, 1);
+					}
+					this._renderStep();
+				});
+
+			ee`<label class="ve-flex-v-center ve-mb-1 ${isAtLimit ? "ve-muted" : ""}" style="flex: 0 0 calc(33% - 8px); min-width: 120px; cursor: ${isAtLimit ? "default" : "pointer"};">
+				${cb}<span>${CharacterModel.ABILITY_TO_FULL[ab]}</span>
+			</label>`.appendTo(wrpChecks);
+		});
+	}
+
+	_renderAbilityChoiceWeighted (parent, group) {
+		const assign = this._state.abilityChoices[group.id] ||= {};
+		// Drop assignments no longer available.
+		Object.keys(assign).forEach(ix => { if (!group.from.includes(assign[ix])) delete assign[ix]; });
+
+		const wrpGroup = ee`<div class="ve-flex-col ve-w-100 ve-mb-2"></div>`.appendTo(parent);
+		ee`<div class="ve-bold ve-mb-1">${group.srcLabel.qq()}: assign bonuses</div>`.appendTo(wrpGroup);
+
+		const wrpRows = ee`<div class="ve-flex-col ve-char__gap-2 ve-w-100" style="max-width: 420px;"></div>`.appendTo(wrpGroup);
+
+		group.weights.forEach((wt, ix) => {
+			const row = ee`<div class="ve-split-v-center ve-w-100"></div>`.appendTo(wrpRows);
+
+			const comp = BaseComponent.fromObject({sel: assign[ix] ?? null});
+			const usedElsewhere = Object.entries(assign).filter(([k]) => Number(k) !== ix).map(([, v]) => v);
+
+			const sel = ComponentUiUtil.getSelEnum(
+				comp,
+				"sel",
+				{
+					values: group.from,
+					isAllowNull: true,
+					displayNullAs: "\u2014",
+					fnDisplay: (ab) => ab == null ? "\u2014" : `${CharacterModel.ABILITY_TO_FULL[ab]}${usedElsewhere.includes(ab) ? " (used)" : ""}`,
+				},
+			);
+			comp._addHookBase("sel", () => {
+				const ab = comp._state.sel;
+				// Prevent assigning the same ability to two weight slots.
+				if (ab != null && usedElsewhere.includes(ab)) {
+					comp._state.sel = assign[ix] ?? null;
+					return;
+				}
+				if (ab == null) delete assign[ix];
+				else assign[ix] = ab;
+				this._renderStep();
+			});
+
+			ee`<div class="ve-flex-v-center ve-w-100 ve-split-v-center">
+				<span class="ve-bold">${wt >= 0 ? "+" : ""}${wt}</span>
+				<span class="ve-flex-v-center ve-char__gap-2" style="max-width: 240px;">${sel}</span>
+			</div>`.appendTo(row);
+		});
+	}
+
+	_renderAbilityFinalPreview (parent) {
+		const base = this._getFinalAbilityScoresBase();
+		const bonuses = this._getResolvedAbilityBonuses();
+
+		const wrpPreview = ee`<div class="ve-flex-col ve-w-100 ve-mt-3 ve-pt-2" style="border-top: 1px solid rgba(127,127,127,0.25);"></div>`.appendTo(parent);
+		ee`<div class="ve-muted ve-mb-1">Final scores (base + bonus)</div>`.appendTo(wrpPreview);
+
+		const wrpRow = ee`<div class="ve-flex-wrap ve-w-100 ve-char__gap-2"></div>`.appendTo(wrpPreview);
+		CharacterModel.ABILITIES.forEach(ab => {
+			const bonus = bonuses[ab] || 0;
+			const finalScore = base[ab] + bonus;
+			const mod = CharacterModel.getAbilityModifier(finalScore);
+			const bonusTxt = bonus ? ` ${bonus >= 0 ? "+" : "\u2212"}${Math.abs(bonus)}` : "";
+			ee`<div class="ve-flex-col ve-flex-vh-center ve-p-2" style="flex: 0 0 calc(16.66% - 8px); min-width: 80px; border: 1px solid rgba(127,127,127,0.25); border-radius: 4px;">
+				<span class="ve-muted ve-small">${ab.toUpperCase()}</span>
+				<span class="ve-bold" style="font-size: 1.1em;">${finalScore}</span>
+				<span class="ve-muted ve-small" title="base ${base[ab]}${bonusTxt}">(${mod >= 0 ? "+" : ""}${mod})</span>
+			</div>`.appendTo(wrpRow);
+		});
 	}
 
 	_renderAbilitiesPointBuy (parent) {
@@ -1141,6 +1398,107 @@ export class CharacterBuilder {
 		doRenderList();
 	}
 
+	/* -------------------------------------------- Invocations -------------------------------------------- */
+
+	/**
+	 * Build `classInfos`-shaped objects (`{ref:{level}, cls}`) from the builder's class selections so
+	 * the shared data helpers (count/eligibility/pact level) can be reused without re-resolving data.
+	 */
+	_getBuilderClassInfos () {
+		return this._state.classes
+			.filter(it => it.ref)
+			.map(it => ({
+				ref: {level: it.level || 1},
+				cls: this._findByHash(this._dataClasses, UrlUtil.PG_CLASSES, it.ref.hash),
+			}))
+			.filter(ci => ci.cls);
+	}
+
+	_renderStepInvocations () {
+		const wrp = ee`<div class="ve-flex-col ve-w-100"></div>`.appendTo(this._wrpStepContent);
+		ee`<h4 class="ve-mt-0 ve-mb-2">Eldritch Invocations</h4>`.appendTo(wrp);
+
+		const classInfos = this._getBuilderClassInfos();
+		const warlockLevel = CharactersDataUtil.getPactCasterLevel(classInfos);
+
+		if (!warlockLevel) {
+			ee`<div class="ve-muted ve-italic">No invocation-granting class selected. Eldritch Invocations are gained by the Warlock class.</div>`.appendTo(wrp);
+			return;
+		}
+
+		const allowed = CharactersDataUtil.getEldritchInvocationCount(classInfos);
+
+		// Soft-eligibility context. Builder-known spells aren't easily resolved here, so spell
+		// prerequisites are treated leniently (still shown, just marked).
+		const eligCtx = {warlockLevel, pactBoon: null, patron: null, knownSpellUids: new Set()};
+
+		const hdrCount = ee`<div class="ve-muted ve-mb-3"></div>`.appendTo(wrp);
+		const updateHeader = () => {
+			hdrCount.txt(`Chosen ${this._state.optionalFeatures.length} of ${allowed} invocations.`);
+			hdrCount.toggleClass("ve-char-sheet__over-limit", this._state.optionalFeatures.length > allowed);
+		};
+
+		const byHash = {};
+		this._dataOptionalFeatures.forEach(ent => { byHash[UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_OPT_FEATURES](ent)] = ent; });
+
+		const wrpList = ee`<div class="ve-flex-col ve-char__gap-1 ve-w-100 ve-mb-3" style="max-width: 480px;"></div>`;
+
+		const doRenderList = () => {
+			wrpList.empty();
+			if (!this._state.optionalFeatures.length) {
+				ee`<div class="ve-muted ve-italic">No invocations added.</div>`.appendTo(wrpList);
+				return;
+			}
+			this._state.optionalFeatures.forEach((ref, ix) => {
+				const ent = byHash[ref.hash];
+				const name = ent ? CharactersDataUtil.getDisplayWithSource(ent) : ref.hash;
+				const isEligible = ent ? CharactersDataUtil.isInvocationEligible(ent, eligCtx) : true;
+				const btnDel = ee`<button class="ve-btn ve-btn-danger ve-btn-xs" title="Remove"><span class="glyphicon glyphicon-trash"></span></button>`
+					.onn("click", () => { this._state.optionalFeatures.splice(ix, 1); doRenderList(); updateHeader(); });
+				ee`<div class="ve-split-v-center ve-char-builder__feat-row ve-px-2 ve-py-1">
+					<span>${name.qq()}${isEligible ? "" : ` <span class="ve-char-sheet__over-limit ve-small">(prereq not met)</span>`}</span>${btnDel}
+				</div>`.appendTo(wrpList);
+			});
+		};
+
+		const comp = BaseComponent.fromObject({sel: null});
+		const sel = ComponentUiUtil.getSelSearchable(
+			comp,
+			"sel",
+			{
+				values: this._dataOptionalFeatures.map(ent => UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_OPT_FEATURES](ent)),
+				isAllowNull: true,
+				displayNullAs: "Search invocations to add\u2026",
+				fnDisplay: (hash) => {
+					if (hash == null) return "Search invocations to add\u2026";
+					const ent = byHash[hash];
+					const isEligible = CharactersDataUtil.isInvocationEligible(ent, eligCtx);
+					return `${CharactersDataUtil.getDisplayWithSource(ent)}${isEligible ? "" : " (prereq not met)"}`;
+				},
+			},
+		);
+		comp._addHookBase("sel", () => {
+			const hash = comp._state.sel;
+			if (hash == null) return;
+			if (!this._state.optionalFeatures.some(it => it.hash === hash && it.source === byHash[hash].source)) {
+				this._state.optionalFeatures.push({page: UrlUtil.PG_OPT_FEATURES, source: byHash[hash].source, hash});
+				doRenderList();
+				updateHeader();
+			}
+			comp._state.sel = null;
+		});
+
+		ee`<label class="ve-flex-col ve-w-100 ve-mb-3" style="max-width: 480px;">
+			<span class="ve-muted ve-mb-1">Add invocation</span>
+			${sel}
+		</label>`.appendTo(wrp);
+
+		wrpList.appendTo(wrp);
+		ee`<div class="ve-muted ve-italic ve-small ve-mt-2" style="max-width: 480px;">Invocations with unmet prerequisites are marked but can still be added.</div>`.appendTo(wrp);
+		doRenderList();
+		updateHeader();
+	}
+
 	/* -------------------------------------------- Review -------------------------------------------- */
 
 	_renderStepReview () {
@@ -1202,6 +1560,13 @@ export class CharacterBuilder {
 			.join(", ") || "\u2014";
 		addRow("Feats", featNames.qq());
 
+		if (this._state.optionalFeatures.length) {
+			const invocationNames = this._state.optionalFeatures
+				.map(ref => { const ent = this._findByHash(this._dataOptionalFeatures, UrlUtil.PG_OPT_FEATURES, ref.hash); return ent ? ent.name : ref.hash; })
+				.join(", ");
+			addRow("Invocations", invocationNames.qq());
+		}
+
 		// Equipment summary (best-effort; uses the cache populated when the Equipment step was viewed).
 		if (!this._isEdit) {
 			const wrpEquip = ee`<div class="ve-split-v-center ve-w-100 ve-py-1 ve-char-builder__review-row">
@@ -1234,7 +1599,8 @@ export class CharacterBuilder {
 		return ent ? ent.name : ref.hash;
 	}
 
-	_getFinalAbilityScores () {
+	/** Base ability scores from the selected mode, BEFORE racial/background bonuses. */
+	_getFinalAbilityScoresBase () {
 		switch (this._state.abilityMode) {
 			case "standard": {
 				const out = {};
@@ -1246,6 +1612,15 @@ export class CharacterBuilder {
 			default:
 				return {...this._state.abilityScores};
 		}
+	}
+
+	/** Final ability scores = base scores + resolved racial/background bonuses. */
+	_getFinalAbilityScores () {
+		const base = this._getFinalAbilityScoresBase();
+		const bonuses = this._getResolvedAbilityBonuses();
+		const out = {};
+		CharacterModel.ABILITIES.forEach(ab => { out[ab] = base[ab] + (bonuses[ab] || 0); });
+		return out;
 	}
 
 	getCharacter () {
@@ -1264,6 +1639,11 @@ export class CharacterBuilder {
 		base.feats = this._state.feats.map(ref => ({
 			...ref,
 			_displayName: this._getRefName(this._dataFeats, UrlUtil.PG_FEATS, ref),
+		}));
+
+		base.optionalFeatures = this._state.optionalFeatures.map(ref => ({
+			...ref,
+			_displayName: this._getRefName(this._dataOptionalFeatures, UrlUtil.PG_OPT_FEATURES, ref),
 		}));
 
 		base.classes = this._state.classes
@@ -1324,6 +1704,7 @@ export class CharacterBuilder {
 
 		// Persist builder-only choice state so editing re-opens with the same selections.
 		base._builder = {
+			abilityChoices: MiscUtil.copyFast(this._state.abilityChoices),
 			skillChoices: MiscUtil.copyFast(this._state.skillChoices),
 			toolChoices: MiscUtil.copyFast(this._state.toolChoices),
 			equipmentChoices: MiscUtil.copyFast(this._state.equipmentChoices),

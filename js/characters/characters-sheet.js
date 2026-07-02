@@ -40,25 +40,25 @@ export class CharacterSheet {
 		wrp.empty();
 
 		const ch = this._character;
-		[this._classInfos, this._race, this._background, this._feats, this._knownSpells, this._inventory] = await Promise.all([
+		[this._classInfos, this._race, this._background, this._feats, this._knownSpells, this._inventory, this._optionalFeatures] = await Promise.all([
 			CharactersDataUtil.pGetCharacterClasses(ch),
 			ch.race ? CharactersDataUtil.pGetRace(ch.race) : Promise.resolve(null),
 			ch.background ? CharactersDataUtil.pGetBackground(ch.background) : Promise.resolve(null),
 			Promise.all((ch.feats || []).map(ref => CharactersDataUtil.pGetFeat(ref))).then(arr => arr.filter(Boolean)),
 			Promise.all((ch.spells?.known || []).map(ref => CharactersDataUtil.pGetEntity(ref).then(ent => ent ? {ref, ent} : null))).then(arr => arr.filter(Boolean)),
 			CharactersDataUtil.pGetCharacterInventory(ch),
+			CharactersDataUtil.pGetCharacterOptionalFeatures(ch),
 		]);
 
-		// Resolve spells auto-granted via `additionalSpells` (subclass/class/race/feat). These are
-		// surfaced as locked, always-prepared spells in the spell manager and the known-spell list.
+		// Resolve spells auto-granted via `additionalSpells` (subclass/class/race/feat/invocation). These
+		// are surfaced as locked, always-prepared spells in the spell manager and the known-spell list.
 		const fnGetClsForGrants = (ref) => (this._classInfos.find(ci => ci.ref.hash === ref.hash)?.cls) || null;
 		if (CharactersCalc.isSpellcaster(ch, fnGetClsForGrants)) {
 			// Use the selection limits' max spell level (handles Warlock pact magic, which the slot
 			// table does not), falling back to the slot-derived level for safety.
 			const limits = CharactersCalc.getSpellSelectionLimits(ch, fnGetClsForGrants);
 			const maxSpellLevel = limits.reduce((acc, l) => Math.max(acc, l.maxSpellLevel || 0), CharactersCalc.getMaxSpellLevel(ch, fnGetClsForGrants));
-			const optionalFeatures = await CharactersDataUtil.pGetCharacterOptionalFeatures(ch);
-			this._grantedSpells = (await CharactersDataUtil.getGrantedSpells(this._classInfos, this._race, this._feats, maxSpellLevel, optionalFeatures)).granted;
+			this._grantedSpells = (await CharactersDataUtil.getGrantedSpells(this._classInfos, this._race, this._feats, maxSpellLevel, this._optionalFeatures)).granted;
 		} else {
 			this._grantedSpells = [];
 		}
@@ -542,8 +542,11 @@ export class CharacterSheet {
 
 		const btnDone = ee`<button class="ve-btn ve-btn-default ve-mt-2">Done</button>`
 			.onn("click", () => {
-				// Recover short-rest abilities on completing the rest.
-				if (this._resetAbilityUses([CharactersActions.RESET_SHORT])) {
+				// Recover short-rest abilities and Pact Magic slots on completing the rest.
+				const didResetAbilities = this._resetAbilityUses([CharactersActions.RESET_SHORT]);
+				const hadPactUsed = (this._character.spells?.pact?.used || 0) > 0;
+				this._restorePactSlots();
+				if (didResetAbilities || hadPactUsed) {
 					if (this._fnOnChange) this._fnOnChange();
 					doClose();
 					return this.pRender(this._wrp);
@@ -580,8 +583,9 @@ export class CharacterSheet {
 		ch.hp.current = hpMax;
 		ch.hp.temp = 0;
 
-		// Spell slots
+		// Spell slots (including Pact Magic)
 		Object.values(ch.spells?.slots || {}).forEach(slot => { slot.used = 0; });
+		this._restorePactSlots();
 
 		// Limited-use abilities — a long rest also satisfies anything that recovers on a short rest.
 		this._resetAbilityUses([CharactersActions.RESET_SHORT, CharactersActions.RESET_LONG]);
@@ -1328,6 +1332,146 @@ export class CharacterSheet {
 		refreshAll();
 	}
 
+	/**
+	 * Modal for choosing Eldritch Invocations. Lists every invocation with its prerequisite text;
+	 * ineligible invocations (given the character's warlock level / known spells) are marked but may
+	 * still be selected (soft enforcement). The allowed count is derived from the warlock class's
+	 * `optionalfeatureProgression`; selecting more than allowed shows a warning but is not blocked.
+	 */
+	async _pOpenInvocationManager () {
+		const ch = this._character;
+		ch.optionalFeatures = ch.optionalFeatures || [];
+
+		const [allInvocations] = await Promise.all([
+			CharactersDataUtil.pLoadEldritchInvocations(),
+		]);
+
+		const warlockLevel = CharactersDataUtil.getPactCasterLevel(this._classInfos);
+		const allowed = CharactersDataUtil.getEldritchInvocationCount(this._classInfos);
+
+		// Context for soft eligibility labelling.
+		const knownSpellUids = new Set(
+			(this._knownSpells || []).map(k => `${k.ent.name}`.toLowerCase())
+				.concat((this._grantedSpells || []).map(g => `${g.ent.name}`.toLowerCase())),
+		);
+		const eligCtx = {warlockLevel, pactBoon: null, patron: null, knownSpellUids};
+
+		const keyOf = (ent) => `${ent.source}|${UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_OPT_FEATURES](ent)}`.toLowerCase();
+
+		// Working selection set, seeded from stored optional features (keyed like the entities).
+		const selected = new Set(
+			(ch.optionalFeatures || []).map(ref => `${ref.source}|${ref.hash}`.toLowerCase()),
+		);
+
+		const {eleModalInner, doClose} = UiUtil.getShowModal({
+			title: "Manage Eldritch Invocations",
+			isWidth100: true,
+			isHeight100: true,
+			isUncappedHeight: true,
+			cbClose: () => {},
+		});
+
+		const renderer = Renderer.get().setFirstSection(true);
+
+		// Header count readout.
+		const hdrCount = ee`<span class="ve-bold"></span>`;
+		const rowRefreshers = [];
+		const updateHeader = () => {
+			hdrCount.txt(`Chosen ${selected.size}/${allowed}`);
+			hdrCount.toggleClass("ve-char-sheet__over-limit", selected.size > allowed);
+		};
+		const refreshAll = () => { updateHeader(); rowRefreshers.forEach(fn => fn()); };
+
+		// Right-hand preview pane.
+		const wrpPreview = ee`<div class="ve-char-sheet__spell-preview ve-overflow-y-auto"></div>`;
+		const clearPreview = () => wrpPreview.html(`<div class="ve-muted ve-italic ve-p-3 ve-text-center">Hover or click <span class="glyphicon glyphicon-info-sign"></span> on an invocation to preview it here.</div>`);
+		clearPreview();
+		const showPreview = (ent) => {
+			wrpPreview.empty();
+			ee`<table class="w-100 stats">${Renderer.optionalfeature.getCompactRenderedString(ent)}</table>`.appendTo(wrpPreview);
+		};
+
+		const wrpRows = ee`<div class="ve-flex-col ve-py-2"></div>`;
+
+		if (!allInvocations.length) {
+			ee`<div class="ve-muted ve-italic ve-p-2">No Eldritch Invocations available.</div>`.appendTo(wrpRows);
+		}
+
+		allInvocations
+			.slice()
+			.sort((a, b) => SortUtil.ascSortLower(a.name, b.name) || SortUtil.ascSortLower(a.source, b.source))
+			.forEach(ent => {
+				const k = keyOf(ent);
+				const isEligible = CharactersDataUtil.isInvocationEligible(ent, eligCtx);
+				const prereqText = ent.prerequisite
+					? Renderer.utils.prerequisite.getHtml(ent.prerequisite, {isListMode: true, isTextOnly: true})
+					: "";
+
+				const btnInfo = ee`<button class="ve-char-sheet__spell-info ve-btn ve-btn-xxs ve-btn-default" title="Preview ${ent.name.qq()}"><span class="glyphicon glyphicon-info-sign"></span></button>`
+					.onn("click", () => showPreview(ent))
+					.onn("mouseover", () => showPreview(ent));
+
+				const toggle = ee`<button class="ve-char-sheet__spell-toggle" title="Toggle invocation"></button>`
+					.onn("click", () => {
+						if (selected.has(k)) selected.delete(k);
+						else selected.add(k);
+						refreshAll();
+					});
+
+				const metaBits = [`${Parser.sourceJsonToAbv(ent.source)}`];
+				if (prereqText) metaBits.push(prereqText);
+
+				const row = ee`<div class="ve-char-sheet__spell-row ve-flex-v-center ve-char__gap-2">
+					${toggle}
+					${btnInfo}
+					<span class="ve-char-sheet__spell-name ${isEligible ? "" : "ve-muted"}" title="${ent.name.qq()}">${ent.name.qq()}</span>
+					<span class="ve-muted ve-small">${metaBits.join(" \u2022 ")}${isEligible ? "" : ` \u2022 <span class="ve-char-sheet__over-limit">prereq not met</span>`}</span>
+				</div>`;
+				row.appendTo(wrpRows);
+
+				rowRefreshers.push(() => {
+					const isSel = selected.has(k);
+					toggle.toggleClass("ve-char-sheet__spell-toggle--on", isSel);
+					row.toggleClass("ve-char-sheet__spell-row--on", isSel);
+				});
+			});
+
+		const btnSave = ee`<button class="ve-btn ve-btn-primary">Save Invocations</button>`
+			.onn("click", async () => {
+				ch.optionalFeatures = allInvocations
+					.filter(ent => selected.has(keyOf(ent)))
+					.map(ent => ({
+						page: UrlUtil.PG_OPT_FEATURES,
+						source: ent.source,
+						hash: UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_OPT_FEATURES](ent),
+						_displayName: ent.name,
+					}));
+				if (this._fnOnChange) this._fnOnChange();
+				this._optionalFeatures = await CharactersDataUtil.pGetCharacterOptionalFeatures(ch);
+				doClose();
+				await this.pRender(this._wrp);
+			});
+
+		ee`<div class="ve-flex-col ve-w-100 ve-h-100 ve-min-h-0">
+			<div class="ve-flex-col ve-char__gap-1 ve-p-2 ve-char-sheet__spell-hdr">
+				<div class="ve-split-v-center ve-char__gap-3">
+					<div class="ve-flex-v-center ve-char__gap-3 ve-flex-wrap">
+						${hdrCount}
+						${warlockLevel ? "" : ee`<span class="ve-muted ve-small ve-italic">No Warlock levels — invocations shown for reference.</span>`}
+					</div>
+					${btnSave}
+				</div>
+				<div><span class="ve-muted ve-small">Ineligible invocations are marked but may still be chosen.</span></div>
+			</div>
+			<div class="ve-flex ve-w-100 ve-h-100 ve-min-h-0">
+				<div class="ve-char-sheet__spell-list ve-flex-col ve-overflow-y-auto ve-min-h-0 ve-px-2">${wrpRows}</div>
+				${wrpPreview}
+			</div>
+		</div>`.appendTo(eleModalInner);
+
+		refreshAll();
+	}
+
 	/* -------------------------------------------- Proficiencies -------------------------------------------- */
 
 	_renderProficiencies () {
@@ -1370,6 +1514,7 @@ export class CharacterSheet {
 
 		const info = CharactersCalc.getSpellcastingInfo(ch, fnGetCls);
 		const slots = CharactersCalc.getSpellSlotsMax(ch, fnGetCls);
+		const pactSlots = CharactersCalc.getPactMagicSlots(ch, fnGetCls);
 		const limits = CharactersCalc.getSpellSelectionLimits(ch, fnGetCls);
 
 		const infoRows = info.map(it => ee`<div class="ve-char-sheet__line ve-split-v-center">
@@ -1378,18 +1523,27 @@ export class CharacterSheet {
 		</div>`);
 
 		const slotsEle = this._renderSpellSlots(slots);
+		const pactSlotsEle = this._renderPactSlots(pactSlots);
 		const spellsEle = this._renderKnownSpells(limits);
 
 		const btnManage = ee`<button class="ve-btn ve-btn-xs ve-btn-primary">Manage Spells</button>`
 			.onn("click", () => this._pOpenSpellManager(limits));
 
+		// Warlock-style classes may choose Eldritch Invocations.
+		const isWarlock = CharactersDataUtil.getPactCasterLevel(this._classInfos) > 0;
+		const btnInvocations = isWarlock
+			? ee`<button class="ve-btn ve-btn-xs ve-btn-default">Manage Invocations</button>`
+				.onn("click", () => this._pOpenInvocationManager())
+			: "";
+
 		return ee`<div class="ve-char-sheet__panel">
 			<div class="ve-split-v-center">
 				<div class="ve-char-sheet__panel-title ve-mb-0 ve-no-border">Spellcasting</div>
-				${btnManage}
+				<div class="ve-flex-v-center ve-char__gap-1">${btnInvocations}${btnManage}</div>
 			</div>
 			${infoRows}
 			${slotsEle}
+			${pactSlotsEle}
 			${spellsEle}
 		</div>`;
 	}
@@ -1451,8 +1605,67 @@ export class CharacterSheet {
 	_restoreAllSlots () {
 		const ch = this._character;
 		Object.values(ch.spells?.slots || {}).forEach(slot => { slot.used = 0; });
+		this._restorePactSlots();
 		if (this._fnOnChange) this._fnOnChange();
 		return this.pRender(this._wrp);
+	}
+
+	/**
+	 * Render the Warlock Pact Magic slot tracker as a separate pool (all slots the same level,
+	 * regained on a short *or* long rest). No-op when the character has no pact slots.
+	 */
+	_renderPactSlots (pact) {
+		if (!pact) return "";
+
+		const ch = this._character;
+		ch.spells = ch.spells || {};
+
+		const {count: max, level} = pact;
+		const stored = ch.spells.pact || {used: 0, max, level};
+		// Keep stored max/level in sync with the derived values.
+		stored.max = max;
+		stored.level = level;
+		const used = Math.min(stored.used || 0, max);
+		ch.spells.pact = {used, max, level};
+
+		const pips = [];
+		for (let i = 0; i < max; ++i) {
+			const isUsed = i < used;
+			const pip = ee`<button class="ve-char-sheet__slot-pip ${isUsed ? "ve-char-sheet__slot-pip--used" : ""}" title="${isUsed ? "Expended" : "Available"} \u2022 click to toggle"></button>`
+				.onn("click", () => this._togglePactSlot(i));
+			pips.push(pip);
+		}
+
+		const btnRest = ee`<button class="ve-btn ve-btn-xs ve-btn-default ve-mt-1" title="Regain all Pact Magic slots (short or long rest)">Rest \u2022 Restore Pact Slots</button>`
+			.onn("click", () => { this._restorePactSlots(); if (this._fnOnChange) this._fnOnChange(); return this.pRender(this._wrp); });
+
+		return ee`<div class="ve-char-sheet__slots ve-flex-col ve-char__gap-1 ve-mt-2">
+			<div class="ve-muted ve-small ve-bold">Pact Magic</div>
+			<div class="ve-char-sheet__slot-row ve-flex-v-center ve-char__gap-2">
+				<span class="ve-char-sheet__slot-lvl ve-muted ve-small ve-bold">Lvl ${level}</span>
+				<span class="ve-flex ve-char__gap-1 ve-flex-wrap">${pips}</span>
+				<span class="ve-muted ve-small">${max - used}/${max}</span>
+			</div>
+			${btnRest}
+		</div>`;
+	}
+
+	/** Toggle a single Pact Magic slot's expended state. */
+	_togglePactSlot (ix) {
+		const ch = this._character;
+		const pact = ch.spells?.pact;
+		if (!pact) return;
+		const used = pact.used || 0;
+		pact.used = ix < used ? ix : ix + 1;
+		pact.used = Math.max(0, Math.min(pact.max, pact.used));
+		if (this._fnOnChange) this._fnOnChange();
+		return this.pRender(this._wrp);
+	}
+
+	/** Regain all Pact Magic slots (short or long rest). Mutates in place; does not persist/re-render. */
+	_restorePactSlots () {
+		const pact = this._character.spells?.pact;
+		if (pact) pact.used = 0;
 	}
 
 	/** Render the list of known/prepared spells, grouped by level, with selection-count summaries. */
@@ -1809,6 +2022,9 @@ export class CharacterSheet {
 			{id: "feats", name: "Feats", features: this._collectFeats()},
 		];
 
+		const invocations = this._collectInvocations();
+		if (invocations.length) tabs.push({id: "invocations", name: "Invocations", features: invocations});
+
 		const wrpTabBtns = ee`<div class="ve-char-sheet__feature-tabs ve-flex"></div>`.appendTo(wrp);
 		const wrpTabBodies = ee`<div class="ve-char-sheet__feature-bodies"></div>`.appendTo(wrp);
 
@@ -1902,6 +2118,18 @@ export class CharacterSheet {
 				name: feat.name,
 				entries: feat.entries,
 				_sourceLabel: "Feat",
+			}));
+	}
+
+	/** Gather the character's chosen Eldritch Invocations (and other optional features) as features. */
+	_collectInvocations () {
+		return (this._optionalFeatures || [])
+			.filter(ent => ent && ent.entries)
+			.map(ent => ({
+				type: "entries",
+				name: ent.name,
+				entries: ent.entries,
+				_sourceLabel: Array.isArray(ent.featureType) && ent.featureType.includes("EI") ? "Eldritch Invocation" : "Optional Feature",
 			}));
 	}
 }

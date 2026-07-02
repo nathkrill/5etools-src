@@ -167,6 +167,99 @@ export class CharactersDataUtil {
 		return refs.map(ref => this._findInList(list, ref, UrlUtil.PG_OPT_FEATURES)).filter(Boolean);
 	}
 
+	/* -------------------------------------------- Eldritch Invocations -------------------------------------------- */
+
+	/** All Eldritch Invocations (optional features whose `featureType` includes `"EI"`), sorted by name. */
+	static async pLoadEldritchInvocations () {
+		const all = await this.pLoadOptionalFeatures();
+		return all.filter(ent => Array.isArray(ent.featureType) && ent.featureType.includes("EI"));
+	}
+
+	/**
+	 * How many Eldritch Invocations the character is entitled to at their current level, read from the
+	 * class's `optionalfeatureProgression` entry whose `featureType` includes `"EI"`.
+	 * @param classInfos `[{ref, cls, subclass}]`
+	 * @return {number}
+	 */
+	static getEldritchInvocationCount (classInfos) {
+		let total = 0;
+		(classInfos || []).forEach(ci => {
+			const cls = ci?.cls;
+			const level = ci?.ref?.level || 0;
+			if (!cls || !level || !Array.isArray(cls.optionalfeatureProgression)) return;
+			const prog = cls.optionalfeatureProgression
+				.find(p => Array.isArray(p.featureType) && p.featureType.includes("EI"));
+			if (!prog) return;
+
+			if (Array.isArray(prog.progression)) {
+				total += prog.progression[Math.min(prog.progression.length - 1, level - 1)] || 0;
+			} else if (prog.progression && typeof prog.progression === "object") {
+				// Object keyed by level threshold -> cumulative count.
+				let best = 0;
+				Object.entries(prog.progression).forEach(([lvlKey, cnt]) => {
+					if (Number(lvlKey) <= level) best = Math.max(best, cnt);
+				});
+				total += best;
+			}
+		});
+		return total;
+	}
+
+	/** The character's total level in Warlock-style ("pact") classes. */
+	static getPactCasterLevel (classInfos) {
+		return (classInfos || [])
+			.filter(ci => ci?.cls?.casterProgression === "pact")
+			.reduce((acc, ci) => acc + (ci?.ref?.level || 0), 0);
+	}
+
+	/**
+	 * Soft eligibility check for an Eldritch Invocation given the character's current build. Used for
+	 * *labelling* only — the picker still allows ineligible selections. Returns `true` when no
+	 * prerequisite blocks the invocation given the supplied context.
+	 * @param ent The optional-feature entity.
+	 * @param ctx `{warlockLevel, pactBoon, patron, knownSpellUids: Set<string>}`
+	 * @return {boolean}
+	 */
+	static isInvocationEligible (ent, ctx = {}) {
+		const {warlockLevel = 0, pactBoon = null, patron = null, knownSpellUids = null} = ctx;
+		const prereqs = ent?.prerequisite;
+		if (!Array.isArray(prereqs) || !prereqs.length) return true;
+
+		// `prerequisite` is an array of OR-groups; each group is an AND of its keys.
+		return prereqs.some(group => {
+			if (!group || typeof group !== "object") return true;
+
+			// Level prerequisite: number OR {level, class, subclass}.
+			if (group.level != null) {
+				const lvlReq = typeof group.level === "object" ? (group.level.level || 0) : group.level;
+				if (warlockLevel < lvlReq) return false;
+			}
+
+			// Pact boon (e.g. "Chain", "Blade", "Tome").
+			if (group.pact != null) {
+				if (!pactBoon || String(pactBoon).toLowerCase() !== String(group.pact).toLowerCase()) return false;
+			}
+
+			// Patron.
+			if (group.patron != null) {
+				if (!patron || String(patron).toLowerCase() !== String(group.patron).toLowerCase()) return false;
+			}
+
+			// Known-spell prerequisite (string UID or array; skip {choose}/{entry} structured forms softly).
+			if (group.spell != null) {
+				const spellReq = Array.isArray(group.spell) ? group.spell : [group.spell];
+				const stringReqs = spellReq.filter(s => typeof s === "string");
+				if (stringReqs.length && knownSpellUids) {
+					const norm = s => s.split("#")[0].toLowerCase();
+					const ok = stringReqs.some(req => knownSpellUids.has(norm(req)));
+					if (!ok) return false;
+				}
+			}
+
+			return true;
+		});
+	}
+
 	static async pGetItem (ref) {
 		const list = await this.pLoadItems();
 		return this._findInList(list, ref, UrlUtil.PG_ITEMS);

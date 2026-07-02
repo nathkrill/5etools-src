@@ -378,7 +378,7 @@ export class CharactersCalc {
 		return Math.min(20, levels);
 	}
 
-	/** Max spell slots per spell level: `{1: n, 2: n, ...}`. */
+	/** Max spell slots per spell level: `{1: n, 2: n, ...}`. Excludes Warlock pact slots (see `getPactMagicSlots`). */
 	static getSpellSlotsMax (character, classEntities = null) {
 		const fnGetCls = this._normalizeClassEntityGetter(classEntities);
 		const lvl = this.getEffectiveCasterLevel(character, fnGetCls);
@@ -386,6 +386,40 @@ export class CharactersCalc {
 		const out = {};
 		row.forEach((n, ix) => { if (n) out[ix + 1] = n; });
 		return out;
+	}
+
+	/**
+	 * Warlock Pact Magic slots. These form a *separate* pool from normal spell slots: all pact slots
+	 * are the same level and are regained on a short *or* long rest. Sums levels across all classes
+	 * whose `casterProgression` is `"pact"` (multiclass warlocks stack pact levels).
+	 * @return {?{count: number, level: number}} `null` if the character has no pact-magic levels.
+	 */
+	static getPactMagicSlots (character, classEntities = null) {
+		const fnGetCls = this._normalizeClassEntityGetter(classEntities);
+		if (!fnGetCls) return null;
+
+		let pactLevel = 0;
+		(character.classes || []).forEach(clsRef => {
+			const cls = fnGetCls(clsRef);
+			if (cls?.casterProgression === "pact") pactLevel += (clsRef.level || 0);
+		});
+		if (pactLevel <= 0) return null;
+
+		// Standard 5e Warlock Pact Magic progression (slot count / slot level by warlock level).
+		let count;
+		if (pactLevel >= 17) count = 4;
+		else if (pactLevel >= 11) count = 3;
+		else if (pactLevel >= 2) count = 2;
+		else count = 1;
+
+		let level;
+		if (pactLevel >= 9) level = 5;
+		else if (pactLevel >= 7) level = 4;
+		else if (pactLevel >= 5) level = 3;
+		else if (pactLevel >= 3) level = 2;
+		else level = 1;
+
+		return {count, level};
 	}
 
 	/** True if the character has any spellcasting class. */
@@ -425,10 +459,12 @@ export class CharactersCalc {
 			.filter(Boolean);
 	}
 
-	/** Highest spell level the character can cast (from their slot table). 0 if none. */
+	/** Highest spell level the character can cast (from their normal + pact slot tables). 0 if none. */
 	static getMaxSpellLevel (character, classEntities = null) {
 		const slots = this.getSpellSlotsMax(character, classEntities);
 		const lvls = Object.keys(slots).map(Number);
+		const pact = this.getPactMagicSlots(character, classEntities);
+		if (pact) lvls.push(pact.level);
 		return lvls.length ? Math.max(...lvls) : 0;
 	}
 
