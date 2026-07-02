@@ -2,6 +2,7 @@ import {CharacterModel} from "./characters-model.js";
 import {CharactersCalc} from "./characters-calc.js";
 import {CharactersDataUtil} from "./characters-data.js";
 import {CharactersActions} from "./characters-actions.js";
+import {CharactersUnarmoredDefense} from "./characters-unarmored-defense.js";
 
 /**
  * Renders a read-only-ish digital character sheet from a character object, using the
@@ -125,7 +126,7 @@ export class CharacterSheet {
 
 		const feats = this._feats;
 		const fx = CharactersCalc.getFeatEffects(feats);
-		const ac = CharactersCalc.getArmorClass(ch, feats, this._inventory);
+		const ac = CharactersCalc.getArmorClass(ch, feats, this._inventory, this._classInfos);
 		const init = CharactersCalc.getInitiative(ch, feats);
 		const speed = CharactersCalc.getSpeed(ch, feats);
 		const pb = CharactersCalc.getProficiencyBonus(ch);
@@ -164,7 +165,23 @@ export class CharacterSheet {
 					.map(({item}) => item.name);
 				return equippedAc.length ? `Includes equipped: ${equippedAc.join(", ")}` : null;
 			})();
-		const acTitle = [acArmorTitle, featTitle(e => e.ac)].filter(Boolean).join(" \u2022 ") || null;
+		// Note any Unarmored Defense feature that is currently setting the base AC.
+		const acUnarmoredTitle = ch.ac?.override != null
+			? null
+			: (() => {
+				const hasBodyArmor = (this._inventory || [])
+					.some(({entry, item}) => {
+						if (!entry?.equipped || !item || item.ac == null) return false;
+						const itemType = item.bardingType || item.type;
+						let abv = null;
+						try { abv = itemType ? DataUtil.itemType.unpackUid(itemType).abbreviation : null; } catch (e) { abv = null; }
+						return abv !== Parser.ITM_TYP_ABV__SHIELD;
+					});
+				if (hasBodyArmor) return null;
+				const opts = CharactersUnarmoredDefense.getOptions(this._classInfos);
+				return opts.length ? `Includes: ${opts.map(o => o.label).join(", ")}` : null;
+			})();
+		const acTitle = [acArmorTitle, acUnarmoredTitle, featTitle(e => e.ac)].filter(Boolean).join(" \u2022 ") || null;
 
 		return ee`<div class="ve-char-sheet__top ve-flex ve-flex-wrap ve-char__gap-2 ve-mt-3">
 			${tile("Armor Class", ac, {title: acTitle})}
@@ -1830,7 +1847,11 @@ export class CharacterSheet {
 		const renderer = Renderer.get();
 		const w = ab.weapon;
 
-		const nameLink = renderer.render(`{@item ${ab.ent.name}|${ab.ent.source}}`);
+		// Synthetic attacks (e.g. the universal Unarmed Strike) have no catalog entry to link to,
+		// so render their name as plain escaped text rather than an {@item} link.
+		const nameLink = ab.ent.__isSynthetic
+			? ee`<span>${ab.ent.name.qq()}</span>`
+			: renderer.render(`{@item ${ab.ent.name}|${ab.ent.source}}`);
 
 		const meta = [];
 		meta.push(w.abil.toUpperCase());

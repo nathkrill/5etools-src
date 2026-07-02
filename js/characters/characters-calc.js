@@ -1,5 +1,6 @@
 import {CharacterModel} from "./characters-model.js";
 import {CharactersFeatEffects} from "./characters-feat-effects.js";
+import {CharactersUnarmoredDefense} from "./characters-unarmored-defense.js";
 
 /**
  * Derived-statistics engine for a character object.
@@ -125,33 +126,82 @@ export class CharactersCalc {
 
 	/**
 	 * Armor class. Uses an explicit override if set, otherwise computes from equipped armor and
-	 * shields, otherwise an explicit base (+ dex mod), otherwise the unarmored default of 10 + dex
-	 * mod. Feat AC bonuses are added on top of non-overridden values.
+	 * shields, otherwise an explicit base (+ dex mod), otherwise the best of the unarmored default
+	 * (10 + dex mod) and any applicable "Unarmored Defense" class/subclass feature. Feat AC bonuses
+	 * are added on top of non-overridden values.
+	 *
+	 * Per the rules, equipped body armor overrides Unarmored Defense entirely; Unarmored Defense is
+	 * only considered while no body armor is equipped.
 	 * @param character
 	 * @param feats Optional array of resolved feat entities.
 	 * @param inventory Optional array of resolved `{entry, item}` inventory objects (from
 	 *        `CharactersDataUtil.pGetCharacterInventory`). When provided, equipped armor/shields
 	 *        are used to derive the base AC.
+	 * @param classInfos Optional array of resolved `[{ref, cls, subclass}]` (from
+	 *        `CharactersDataUtil.pGetCharacterClasses`). When provided, "Unarmored Defense"
+	 *        class/subclass features are considered while unarmored.
 	 */
-	static getArmorClass (character, feats = null, inventory = null) {
+	static getArmorClass (character, feats = null, inventory = null, classInfos = null) {
 		if (character.ac?.override != null) return character.ac.override;
 		const fx = this.getFeatEffects(feats);
 		const dexMod = this.getAbilityModifier(character, "dex");
 
 		const armorAc = this.getArmorAcFromInventory(inventory, dexMod);
-		if (armorAc != null) return armorAc.base + armorAc.shield + fx.ac;
 
-		if (character.ac?.base != null) return character.ac.base + dexMod + fx.ac;
-		return 10 + dexMod + fx.ac;
+		// Body armor overrides Unarmored Defense entirely (strict RAW).
+		if (armorAc != null && armorAc.hasBodyArmor) return armorAc.base + armorAc.shield + fx.ac;
+
+		// No body armor: consider the manual base, the unarmored default, and any Unarmored
+		// Defense feature, then take the best. A shield's bonus stacks where the feature allows.
+		const shieldBonus = armorAc?.shield || 0;
+		const manualOrDefaultBase = character.ac?.base != null ? character.ac.base + dexMod : 10 + dexMod;
+
+		let best = manualOrDefaultBase + shieldBonus;
+
+		const hasShield = shieldBonus > 0;
+		const udBase = this.getUnarmoredDefenseAc(character, classInfos, {hasShield, shieldBonus});
+		if (udBase != null) best = Math.max(best, udBase);
+
+		return best + fx.ac;
+	}
+
+	/**
+	 * Best base Armor Class granted by an applicable "Unarmored Defense" class/subclass feature,
+	 * or `null` when none applies. Each feature yields `10 + Dex modifier + <secondary ability>
+	 * modifier`; where the feature permits it, an equipped shield's bonus is included.
+	 *
+	 * @param character
+	 * @param classInfos Resolved `[{ref, cls, subclass}]`, or null.
+	 * @param opts.hasShield Whether a shield is currently equipped.
+	 * @param opts.shieldBonus AC bonus from the equipped shield (defaults to 2 when `hasShield`).
+	 */
+	static getUnarmoredDefenseAc (character, classInfos, {hasShield = false, shieldBonus = null} = {}) {
+		const options = CharactersUnarmoredDefense.getOptions(classInfos);
+		if (!options.length) return null;
+
+		const dexMod = this.getAbilityModifier(character, "dex");
+		const effShieldBonus = shieldBonus != null ? shieldBonus : 2;
+
+		let best = null;
+		options.forEach(opt => {
+			// Features that require no shield don't apply while a shield is equipped.
+			if (hasShield && !opt.allowShield) return;
+			let ac = 10 + dexMod + this.getAbilityModifier(character, opt.ability);
+			if (hasShield && opt.allowShield) ac += effShieldBonus;
+			if (best == null || ac > best) best = ac;
+		});
+
+		return best;
 	}
 
 	/**
 	 * Derive base armor class from a character's equipped armor and shields.
 	 *
-	 * Returns `{base, shield}` where `base` is the AC contribution from the best equipped body
-	 * armor (or `10 + dexMod` when no body armor is equipped but a shield is) and `shield` is the
-	 * total bonus from equipped shields. Returns `null` when nothing relevant is equipped, so the
-	 * caller can fall back to the manual/unarmored values.
+	 * Returns `{base, shield, hasBodyArmor}` where `base` is the AC contribution from the best
+	 * equipped body armor (or `10 + dexMod` when no body armor is equipped but a shield is),
+	 * `shield` is the total bonus from equipped shields, and `hasBodyArmor` indicates whether any
+	 * body armor is equipped. Returns `null` when nothing relevant is equipped, so the caller can
+	 * fall back to the manual/unarmored/Unarmored-Defense values.
 	 *
 	 * Armor rules:
 	 *  - Light armor: `ac + Dex modifier`.
@@ -199,7 +249,7 @@ export class CharactersCalc {
 		}
 
 		if (bestArmor == null && !hasShield) return null;
-		return {base: bestArmor == null ? 10 + dexMod : bestArmor, shield: shieldBonus};
+		return {base: bestArmor == null ? 10 + dexMod : bestArmor, shield: shieldBonus, hasBodyArmor: bestArmor != null};
 	}
 
 	/**

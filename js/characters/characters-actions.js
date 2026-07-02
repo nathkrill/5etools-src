@@ -1,4 +1,5 @@
 import {CharactersCalc} from "./characters-calc.js";
+import {CharactersUnarmedStrike} from "./characters-unarmed-strike.js";
 
 /**
  * Aggregates the abilities/actions available to a character for the sheet's
@@ -52,11 +53,12 @@ export class CharactersActions {
 	static getAbilities ({character, classInfos = [], race = null, feats = [], background = null, inventory = []}) {
 		const out = [];
 
+		this._addUnarmedStrike({out, character, classInfos, feats});
 		this._addWeaponAttacks({out, character, inventory});
 		this._addClassFeatures({out, character, classInfos});
-		this._addRacialTraits({out, race});
-		this._addFeats({out, feats});
-		this._addBackgroundFeatures({out, background});
+		this._addRacialTraits({out, character, race});
+		this._addFeats({out, character, feats});
+		this._addBackgroundFeatures({out, character, background});
 
 		// Apply any player overrides (manual tab re-assignment), stored by ability id.
 		const overrides = character.abilityOverrides || {};
@@ -98,6 +100,26 @@ export class CharactersActions {
 		});
 	}
 
+	/**
+	 * Every character can make an Unarmed Strike. Its attack/damage may be upgraded by
+	 * class/feat features (Monk Martial Arts, Tavern Brawler, Unarmed Fighting) via
+	 * {@link CharactersUnarmedStrike}.
+	 */
+	static _addUnarmedStrike ({out, character, classInfos, feats}) {
+		const attack = this.getUnarmedStrikeAttack({character, classInfos, feats});
+		out.push({
+			id: this._getAbilityId("weapon", "unarmed", "Unarmed Strike"),
+			name: "Unarmed Strike",
+			sourceLabel: "Unarmed",
+			kind: "weapon",
+			category: this.CAT_ACTION,
+			entries: null,
+			uses: null,
+			weapon: attack,
+			ent: {name: "Unarmed Strike", source: null, __isSynthetic: true},
+		});
+	}
+
 	static _addClassFeatures ({out, character, classInfos}) {
 		const addFrom = (grouped, level, fnLabel, sourceFallback) => {
 			(grouped || []).forEach(group => {
@@ -124,7 +146,7 @@ export class CharactersActions {
 		});
 	}
 
-	static _addRacialTraits ({out, race}) {
+	static _addRacialTraits ({out, character, race}) {
 		if (!race?.entries) return;
 		const label = race._displayName || race.name || "Race";
 		race.entries
@@ -135,11 +157,12 @@ export class CharactersActions {
 					sourceLabel: label,
 					kind: "racial",
 					source: race.source,
+					character,
 				}));
 			});
 	}
 
-	static _addFeats ({out, feats}) {
+	static _addFeats ({out, character, feats}) {
 		(feats || [])
 			.filter(feat => feat && feat.entries)
 			.forEach(feat => {
@@ -148,11 +171,12 @@ export class CharactersActions {
 					sourceLabel: "Feat",
 					kind: "feat",
 					source: feat.source,
+					character,
 				}));
 			});
 	}
 
-	static _addBackgroundFeatures ({out, background}) {
+	static _addBackgroundFeatures ({out, character, background}) {
 		if (!background?.entries) return;
 		const label = background.name || "Background";
 		// Background `entries` mix flavor strings with named feature blocks; surface only the
@@ -165,6 +189,7 @@ export class CharactersActions {
 					sourceLabel: label,
 					kind: "background",
 					source: background.source,
+					character,
 				}));
 			});
 	}
@@ -179,7 +204,7 @@ export class CharactersActions {
 			kind,
 			category: this._detectCategory({ent: feat, text}),
 			entries: feat.entries,
-			uses: this._detectUses({ent: feat, text}),
+			uses: this._detectUses({ent: feat, text, character}),
 			weapon: null,
 			ent: feat,
 		};
@@ -225,7 +250,7 @@ export class CharactersActions {
 	 * ("per long rest" / "per short or long rest" / "per day"). Conservative: if no count
 	 * can be read, returns null (the player can still add tracking manually).
 	 */
-	static _detectUses ({ent, text}) {
+	static _detectUses ({ent, text, character = null}) {
 		const lc = (text || "").toLowerCase();
 		if (!lc) return null;
 
@@ -241,8 +266,10 @@ export class CharactersActions {
 
 		// Find an explicit numeric count near "times".
 		let max = null;
+		const abilMaxUses = this._detectAbilityModifierUses({lc, character});
 		const numTimes = lc.match(/\b(\d+)\s+times\b/);
-		if (numTimes) max = Number(numTimes[1]);
+		if (abilMaxUses != null) max = abilMaxUses;
+		else if (numTimes) max = Number(numTimes[1]);
 		else if (/\bonce\b/.test(lc) || /can't do so again until/.test(lc) || /can't use it again until/.test(lc)) max = 1;
 		else if (/twice\b/.test(lc)) max = 2;
 		else if (/times equal to your proficiency bonus/.test(lc)) max = null; // variable; let user set
@@ -256,6 +283,22 @@ export class CharactersActions {
 		}
 
 		return {max, resetOn: resetOn || this.RESET_NONE};
+	}
+
+	/**
+	 * Detect uses expressed as "a number of times equal to your <Ability> modifier" (e.g. Bardic
+	 * Inspiration = Charisma modifier). Returns the character's modifier for that ability (minimum 1),
+	 * or null when the phrasing/character isn't present.
+	 */
+	static _detectAbilityModifierUses ({lc, character}) {
+		if (!character) return null;
+		const m = lc.match(/times equal to (?:your |their )?(strength|dexterity|constitution|intelligence|wisdom|charisma) modifier/);
+		if (!m) return null;
+		const abv = Parser.attFullToAbv(m[1].toTitleCase());
+		if (!abv) return null;
+		const mod = CharactersCalc.getAbilityModifier(character, abv);
+		// Features with this phrasing specify "(a minimum of once)".
+		return Math.max(1, mod);
 	}
 
 	/* -------------------------------------------- Text helpers -------------------------------------------- */
@@ -279,6 +322,52 @@ export class CharactersActions {
 	}
 
 	/* -------------------------------------------- Weapon attacks -------------------------------------------- */
+
+	/**
+	 * Compute a character's Unarmed Strike attack and damage.
+	 *
+	 * Every character is proficient with unarmed strikes, so `toHit = abilityMod + proficiency`.
+	 * By default the damage is `1 + Strength modifier` bludgeoning. Class/feat features
+	 * (Monk Martial Arts, Tavern Brawler, Unarmed Fighting) can replace the flat 1 with a die
+	 * and/or let the character use Dexterity — see {@link CharactersUnarmedStrike}.
+	 * @return {object} Same shape as {@link getWeaponAttack}.
+	 */
+	static getUnarmedStrikeAttack ({character, classInfos = [], feats = []}) {
+		const {die, ability} = CharactersUnarmedStrike.getModifiers({classInfos, feats});
+
+		const strMod = CharactersCalc.getAbilityModifier(character, "str");
+		const dexMod = CharactersCalc.getAbilityModifier(character, "dex");
+
+		let abil;
+		let abilMod;
+		if (ability === "dex") { abil = "dex"; abilMod = dexMod; } else if (ability === "best") { abil = dexMod > strMod ? "dex" : "str"; abilMod = Math.max(strMod, dexMod); } else { abil = "str"; abilMod = strMod; }
+
+		const pb = CharactersCalc.getProficiencyBonus(character);
+		const toHit = abilMod + pb; // always proficient with unarmed strikes
+
+		// With a die (Monk/feat), damage is "<die> + mod"; otherwise the flat "1 + mod".
+		const formula = die
+			? this._buildDamageFormula(die, abilMod, 0)
+			: this._buildFlatUnarmedFormula(abilMod);
+
+		return {
+			abil,
+			abilMod,
+			toHit,
+			isProficient: true,
+			magicBonus: 0,
+			damage: [{formula, type: "B", label: "Damage"}],
+			range: null,
+			isRanged: false,
+			properties: [],
+		};
+	}
+
+	/** Build the default flat unarmed damage string: "1 + mod" (or just "1" when mod is 0). */
+	static _buildFlatUnarmedFormula (abilMod) {
+		const total = 1 + (abilMod || 0);
+		return `${Math.max(total, 0)}`;
+	}
 
 	/**
 	 * Compute a weapon's attack and damage for the given character.
